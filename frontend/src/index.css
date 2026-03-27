@@ -1,0 +1,182 @@
+@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=DM+Sans:wght@400;500;600&family=Space+Mono:wght@400&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 3.1%;
+    --foreground: 0 0% 94.1%;
+    --card: 0 0% 8.6%;
+    --card-foreground: 0 0% 94.1%;
+    --popover: 0 0% 6.7%;
+    --popover-foreground: 0 0% 94.1%;
+    --primary: 358 82% 53%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 6.7%;
+    --secondary-foreground: 0 0% 94.1%;
+    --muted: 0 0% 6.7%;
+    --muted-foreground: 0 0% 46.7%;
+    --accent: 358 82% 53%;
+    --accent-foreground: 0 0% 100%;
+    --destructive: 0 84.2% 60.2%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 12.5%;
+    --input: 0 0% 12.5%;
+    --ring: 358 82% 53%;
+    --radius: 0.75rem;
+
+    --bg-primary: #080808;
+    --bg-surface: #111111;
+    --bg-card: #161616;
+    --accent-red: #E8272B;
+    --accent-red-light: #FF4444;
+    --accent-red-glow: rgba(232, 39, 43, 0.15);
+    --text-primary: #F0F0F0;
+    --text-secondary: #777777;
+    --border-color: #202020;
+    --border-hover: #E8272B;
+
+    --sidebar-background: 0 0% 3.1%;
+    --sidebar-foreground: 0 0% 94.1%;
+    --sidebar-primary: 358 82% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 8.6%;
+    --sidebar-accent-foreground: 0 0% 94.1%;
+    --sidebar-border: 0 0% 12.5%;
+    --sidebar-ring: 358 82% 53%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'DM Sans', sans-serif;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Syne', sans-serif;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #1a1a1a;
+}
+::-webkit-scrollbar-thumb {
+  background: #E8272B;
+  border-radius: 2px;
+}
+
+/* Grain overlay */
+.grain-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.03;
+}
+
+/* Glass card */
+.glass-card {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid #1e1e1e;
+  transition: all 200ms ease;
+}
+.glass-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 0 0 1px #E8272B, 0 0 20px rgba(232, 39, 43, 0.2);
+}
+
+/* Hero gradient mesh */
+@keyframes meshShift {
+  0% { background-position: 0% 50%; }
+  25% { background-position: 50% 0%; }
+  50% { background-position: 100% 50%; }
+  75% { background-position: 50% 100%; }
+  100% { background-position: 0% 50%; }
+}
+.hero-mesh {
+  background: linear-gradient(-45deg, #1a0000, #080808, #1a0505, #080808, #0d0000);
+  background-size: 400% 400%;
+  animation: meshShift 8s ease infinite;
+}
+
+/* Baymax animations */
+@keyframes baymaxFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+@keyframes baymaxWave {
+  0%, 100% { transform: rotate(0deg); }
+  50% { transform: rotate(25deg); }
+}
+@keyframes baymaxBlink {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0); }
+}
+
+/* Particle float */
+@keyframes particleFloat {
+  0% { transform: translateY(0) translateX(0); opacity: 0; }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.6; }
+  100% { transform: translateY(-300px) translateX(20px); opacity: 0; }
+}
+
+/* Count up pulse ring */
+@keyframes pulseRing {
+  0% { transform: scale(1); opacity: 0.6; }
+  100% { transform: scale(1.8); opacity: 0; }
+}
+
+/* Red glow button */
+.btn-red-glow:hover {
+  box-shadow: 0 0 0 1px #E8272B, 0 0 20px rgba(232, 39, 43, 0.3);
+}
+.btn-red-glow:active {
+  transform: scale(0.97);
+}
+
+/* Red divider */
+.red-divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #E8272B, transparent);
+}
+
+/* Mono font utility */
+.font-mono-label {
+  font-family: 'Space Mono', monospace;
+}
+
+/* Dashboard glow */
+.dashboard-glow {
+  box-shadow: 0 -1px 0 0 #E8272B, 0 -4px 20px rgba(232, 39, 43, 0.1);
+}
+
+/* Score ring animation */
+@keyframes scoreRing {
+  from { stroke-dashoffset: 283; }
+}
+
+/* Progress bar fill */
+@keyframes fillBar {
+  from { width: 0%; }
+}
+
+/* Staggered fade in */
+@keyframes staggerFadeIn {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}

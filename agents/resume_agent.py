@@ -32,33 +32,6 @@ def get_resume_agent():
 
 def analyze_resume(resume_text: str, job_title: str) -> str:
     """
-    Analyze a resume against a target job title using Alex agent.
-    
-    Args:
-        resume_text: Extracted text from resume PDF
-        job_title: Target job title/description
-        
-    Returns:
-        Analysis result with scores, gaps, and recommendations
-    """
-    llm = get_resume_agent()
-    
-    prompt = f"""
-    Resume:
-    {resume_text}
-    
-    Target Job Title:
-    {job_title}
-    
-    Please analyze this resume for the target job title.
-    """
-    
-    response = llm.invoke(prompt)
-    return response.content
-
-
-def analyze_resume(resume_text: str, job_title: str) -> str:
-    """
     Run resume analysis for the given resume text and job title.
     Returns the agent's analysis as a string.
     """

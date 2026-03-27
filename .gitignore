@@ -34,3 +34,15 @@ logs/
 # Temp files
 *.tmp
 *.bak
+
+# Node.js
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+bun.lock
+bun.lockb
+
+# Build outputs
+dist/
+build/
