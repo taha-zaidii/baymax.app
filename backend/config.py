@@ -1,24 +1,25 @@
 """
-config.py — Centralized configuration for Baymax AI
+backend/config.py — Centralized configuration for Baymax AI
 All settings pulled from environment variables via .env
 """
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env from the project root (one level up from backend/)
+_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+load_dotenv(os.path.join(_root, ".env"))
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
 GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
 SERPER_API_KEY    = os.getenv("SERPER_API_KEY", "")
-FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "fc-72b12ed462de43ccab20fc0e118129de")
-MEM0_API_KEY      = os.getenv("MEM0_API_KEY",      "m0-GmuOrwaLpvuXBjhwGOrb06CgIDKr2Hvv8RsYaQBl")
-
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "")
+MEM0_API_KEY      = os.getenv("MEM0_API_KEY", "")
 
 # ── Groq Model Selection ──────────────────────────────────────────────────────
 # Primary model: llama-3.3-70b-versatile  (smarter, slightly slower)
-# Fast model:    mixtral-8x7b-32768       (blazing speed for quick tasks)
+# Fast model:    llama-3.1-8b-instant     (fast, lightweight tasks)
 GROQ_MODEL      = os.getenv("GROQ_MODEL",      "llama-3.3-70b-versatile")
-GROQ_MODEL_FAST = os.getenv("GROQ_MODEL_FAST", "mixtral-8x7b-32768")
+GROQ_MODEL_FAST = os.getenv("GROQ_MODEL_FAST", "llama-3.1-8b-instant")
 
 # ── ChromaDB ─────────────────────────────────────────────────────────────────
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./data/chroma_db")

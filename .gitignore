@@ -10,6 +10,7 @@ __pycache__/
 venv/
 .venv/
 env/
+backend/venv/
 
 # Environment variables (NEVER commit your .env)
 .env
