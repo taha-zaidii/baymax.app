@@ -1,6 +1,7 @@
 import { useState } from "react";
 import BaymaxMascot from "./BaymaxMascot";
 import ResumeAnalyzer from "./ResumeAnalyzer";
+import ResumeBuilder from "./ResumeBuilder";
 import InterviewCoach from "./InterviewCoach";
 import JobScout from "./JobScout";
 import RoadmapPlanner from "./RoadmapPlanner";
@@ -10,6 +11,7 @@ const tabs = [
   { icon: "🎤", label: "Interview" },
   { icon: "🔍", label: "Job Scout" },
   { icon: "🗺️", label: "Roadmap" },
+  { icon: "🏗️", label: "Builder" },
 ];
 
 const Dashboard = () => {
@@ -37,7 +39,7 @@ const Dashboard = () => {
             </div>
             <div className="hidden md:flex items-center gap-2 text-xs text-muted-foreground">
               <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
-              4 agents online
+              5 agents online
             </div>
           </div>
 
@@ -62,9 +64,7 @@ const Dashboard = () => {
           <div key={activeTab} style={{ animation: "staggerFadeIn 0.3s ease-out" }}>
             {activeTab === 0 && (
               <ResumeAnalyzer
-                onSwitchTab={(tab) => {
-                  setActiveTab(tab);
-                }}
+                onSwitchTab={(tab) => setActiveTab(tab)}
                 onAnalysisComplete={handleResumeComplete}
               />
             )}
@@ -86,6 +86,9 @@ const Dashboard = () => {
                 jobTitle={sharedJobTitle}
                 skillsGap={sharedResumeSummary}
               />
+            )}
+            {activeTab === 4 && (
+              <ResumeBuilder jobTitle={sharedJobTitle} />
             )}
           </div>
         </div>

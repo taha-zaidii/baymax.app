@@ -154,7 +154,7 @@ async def analyze(request: PipelineRequest):
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
 
 
-# ── Resume Analysis Only ──────────────────────────────────────────────────────
+# ── Resume Analysis Only (legacy plain-text) ──────────────────────────────────
 @app.post("/resume-analysis")
 async def resume_analysis_only(
     resume_text: str = Form(...),
@@ -162,6 +162,7 @@ async def resume_analysis_only(
 ):
     """
     Analyze a resume (step 1 of pipeline) without running full analysis.
+    Returns plain markdown text for backward compatibility.
     """
     try:
         from agents.resume_agent import analyze_resume
@@ -176,6 +177,101 @@ async def resume_analysis_only(
         return {"analysis": analysis}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Resume analysis error: {str(e)}")
+
+
+# ── Resume Analysis Structured (NEW) ─────────────────────────────────────────
+@app.post("/resume/analyze-structured")
+async def resume_analyze_structured(
+    file: UploadFile = File(...),
+    job_title: str = Form(...),
+    experience_level: str = Form("0-1"),
+):
+    """
+    Upload a resume PDF and get a fully structured JSON analysis.
+    Returns 5 scores, keywords, strengths, gaps, improvements, and rewritten summary.
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+
+    try:
+        from agents.resume_agent import analyze_resume_structured
+        from tools.pdf_tool import extract_text_from_pdf
+        import tempfile, os
+
+        # Save and extract PDF
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            contents = await file.read()
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        resume_text = extract_text_from_pdf(tmp_path)
+        os.unlink(tmp_path)
+
+        if not resume_text or len(resume_text.strip()) < 20:
+            raise HTTPException(status_code=400, detail="Could not extract text from PDF")
+
+        result = analyze_resume_structured(resume_text, job_title, experience_level)
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Structured analysis error: {str(e)}")
+
+
+# ── Resume Section Improver (NEW) ─────────────────────────────────────────────
+class SectionImproveRequest(BaseModel):
+    section_name: str
+    content: str
+    job_title: str
+
+@app.post("/resume/improve-section")
+async def resume_improve_section(request: SectionImproveRequest):
+    """
+    Take an existing resume section and return AI-enhanced content.
+    Uses strong action verbs, metrics, and ATS-friendly language.
+    """
+    try:
+        from agents.resume_agent import improve_resume_section
+
+        if not request.content or len(request.content.strip()) < 5:
+            raise HTTPException(status_code=400, detail="Content is too short to improve")
+
+        improved = improve_resume_section(
+            section_name=request.section_name,
+            content=request.content,
+            job_title=request.job_title,
+        )
+        return {"improved_content": improved}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Section improve error: {str(e)}")
+
+
+# ── Resume Section Generator (NEW) ───────────────────────────────────────────
+class SectionGenerateRequest(BaseModel):
+    section_name: str
+    context: str
+    job_title: str
+
+@app.post("/resume/generate-section")
+async def resume_generate_section(request: SectionGenerateRequest):
+    """
+    Generate a complete resume section from minimal context.
+    Returns polished, ATS-optimized content.
+    """
+    try:
+        from agents.resume_agent import generate_resume_section
+
+        generated = generate_resume_section(
+            section_name=request.section_name,
+            context=request.context or f"Targeting {request.job_title} role",
+            job_title=request.job_title,
+        )
+        return {"generated_content": generated}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Section generation error: {str(e)}")
 
 
 # ── Multi-Turn Interview Session Models ──────────────────────────────────────

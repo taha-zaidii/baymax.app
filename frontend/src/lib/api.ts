@@ -266,3 +266,111 @@ export async function transcribeAudio(
 
   return response.json();
 }
+
+// ── Structured Resume Analysis (NEW) ─────────────────────────────────────────
+
+export interface ResumeImprovement {
+  section: string;
+  before: string;
+  after: string;
+  why: string;
+}
+
+export interface ResumeAnalysisStructured {
+  overall_score: number;
+  ats_score: number;
+  keyword_match_score: number;
+  impact_score: number;
+  formatting_score: number;
+  verdict: "Excellent" | "Good" | "Needs Improvement";
+  strengths: string[];
+  skill_gaps: string[];
+  keywords_found: string[];
+  keywords_missing: string[];
+  improvements: ResumeImprovement[];
+  rewritten_summary: string;
+  recommendation: string;
+}
+
+/**
+ * Upload a PDF resume and get a fully structured JSON analysis back.
+ * Returns 5 scores, keyword clouds, strengths, gaps, improvements, and
+ * a rewritten professional summary.
+ */
+export async function analyzeResumeStructured(
+  file: File,
+  jobTitle: string,
+  experienceLevel: string = "0-1",
+): Promise<ResumeAnalysisStructured> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("job_title", jobTitle);
+  formData.append("experience_level", experienceLevel);
+
+  const response = await fetch(`${API_BASE_URL}/resume/analyze-structured`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Structured analysis failed");
+  }
+
+  return response.json();
+}
+
+/**
+ * Enhance an existing resume section using AI.
+ * Returns improved content with strong action verbs, metrics, and ATS keywords.
+ */
+export async function improveResumeSection(
+  sectionName: string,
+  content: string,
+  jobTitle: string,
+): Promise<{ improved_content: string }> {
+  const response = await fetch(`${API_BASE_URL}/resume/improve-section`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      section_name: sectionName,
+      content,
+      job_title: jobTitle,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Section improvement failed");
+  }
+
+  return response.json();
+}
+
+/**
+ * Generate a brand-new resume section from minimal context using AI.
+ * Returns polished, ATS-optimized content ready to paste.
+ */
+export async function generateResumeSection(
+  sectionName: string,
+  context: string,
+  jobTitle: string,
+): Promise<{ generated_content: string }> {
+  const response = await fetch(`${API_BASE_URL}/resume/generate-section`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      section_name: sectionName,
+      context,
+      job_title: jobTitle,
+    }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail || "Section generation failed");
+  }
+
+  return response.json();
+}
+
