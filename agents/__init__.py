@@ -1,14 +1,16 @@
 """
-agents/__init__.py — Agent definitions using LangChain + LangGraph
+agents/__init__.py — Agent function exports
 """
-from .resume_agent import get_resume_agent
-from .interview_agent import get_interview_agent
-from .job_search_agent import get_job_search_agent
-from .career_planner_agent import get_career_planner_agent
+from .resume_agent import analyze_resume
+from .interview_agent import start_interview, evaluate_answer, generate_interview
+from .job_search_agent import find_jobs
+from .career_planner_agent import build_roadmap
 
 __all__ = [
-    "get_resume_agent",
-    "get_interview_agent",
-    "get_job_search_agent",
-    "get_career_planner_agent",
+    "analyze_resume",
+    "start_interview",
+    "evaluate_answer",
+    "generate_interview",
+    "find_jobs",
+    "build_roadmap",
 ]
