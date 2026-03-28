@@ -154,6 +154,117 @@ async def analyze(request: PipelineRequest):
         raise HTTPException(status_code=500, detail=f"Pipeline error: {str(e)}")
 
 
+# ── Resume Analyze (open-resume schema: JSON body) ────────────────────────────
+class ResumeAnalyzeRequest(BaseModel):
+    resume_text: str
+    job_description: str
+
+
+@app.post("/resume/analyze")
+async def resume_analyze(request: ResumeAnalyzeRequest):
+    """
+    Analyze a resume against a job description.
+    Accepts JSON { resume_text, job_description }.
+    Returns the exact AnalysisResponse schema:
+      overall_score, ats_score, match_score,
+      strengths, weaknesses, missing_keywords,
+      section_feedback, improved_bullets
+    """
+    try:
+        from agents.resume_agent import analyze_resume_structured
+        from agents.memory_agent import save_resume_analysis
+
+        if not request.resume_text or len(request.resume_text.strip()) < 20:
+            raise HTTPException(status_code=400, detail="resume_text is too short")
+        if not request.job_description or len(request.job_description.strip()) < 10:
+            raise HTTPException(status_code=400, detail="job_description is required")
+
+        result = analyze_resume_structured(
+            resume_text=request.resume_text,
+            job_description=request.job_description,
+        )
+        # Save to mem0 for cross-agent context
+        try:
+            save_resume_analysis("default", request.job_description[:80], result)
+        except Exception:
+            pass
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Resume analysis error: {str(e)}")
+
+
+# ── Resume Analyze via PDF Upload (open-resume schema) ───────────────────────
+@app.post("/resume/analyze/upload")
+async def resume_analyze_upload(
+    file: UploadFile = File(...),
+    job_description: str = Form(...),
+):
+    """
+    Upload a resume PDF + paste job description.
+    Returns the same AnalysisResponse schema as /resume/analyze.
+    """
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    try:
+        from agents.resume_agent import analyze_resume_structured
+        from agents.memory_agent import save_resume_analysis
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            contents = await file.read()
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        resume_text = extract_text_from_pdf(tmp_path)
+        os.unlink(tmp_path)
+
+        if not resume_text or len(resume_text.strip()) < 20:
+            raise HTTPException(status_code=400, detail="Could not extract text from PDF")
+
+        result = analyze_resume_structured(resume_text, job_description)
+        try:
+            save_resume_analysis("default", job_description[:80], result)
+        except Exception:
+            pass
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF analysis error: {str(e)}")
+
+
+# ── Resume Improve (open-resume schema: /improve endpoint) ───────────────────
+class ResumeImproveRequest(BaseModel):
+    text: str
+    context: str = ""
+
+
+@app.post("/resume/improve")
+async def resume_improve(request: ResumeImproveRequest):
+    """
+    Rewrite a single resume bullet / paragraph.
+    Accepts JSON { text, context }.
+    Returns { improved: "..." }
+    """
+    try:
+        from agents.resume_agent import improve_text
+
+        if not request.text or len(request.text.strip()) < 3:
+            raise HTTPException(status_code=400, detail="text is required")
+
+        improved = improve_text(request.text, request.context)
+        return {"improved": improved}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Improve error: {str(e)}")
+
+
 # ── Resume Analysis Only (legacy plain-text) ──────────────────────────────────
 @app.post("/resume-analysis")
 async def resume_analysis_only(
@@ -179,26 +290,22 @@ async def resume_analysis_only(
         raise HTTPException(status_code=500, detail=f"Resume analysis error: {str(e)}")
 
 
-# ── Resume Analysis Structured (NEW) ─────────────────────────────────────────
+# ── Resume Analysis Structured (legacy — kept for backward compat) ────────────
 @app.post("/resume/analyze-structured")
-async def resume_analyze_structured(
+async def resume_analyze_structured_legacy(
     file: UploadFile = File(...),
     job_title: str = Form(...),
-    experience_level: str = Form("0-1"),
 ):
     """
-    Upload a resume PDF and get a fully structured JSON analysis.
-    Returns 5 scores, keywords, strengths, gaps, improvements, and rewritten summary.
+    Legacy endpoint: Upload PDF + job_title → AnalysisResponse JSON.
+    Prefer /resume/analyze/upload (uses job_description for better accuracy).
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
-
     try:
         from agents.resume_agent import analyze_resume_structured
-        from tools.pdf_tool import extract_text_from_pdf
-        import tempfile, os
+        import tempfile
 
-        # Save and extract PDF
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
             contents = await file.read()
             tmp.write(contents)
@@ -210,7 +317,7 @@ async def resume_analyze_structured(
         if not resume_text or len(resume_text.strip()) < 20:
             raise HTTPException(status_code=400, detail="Could not extract text from PDF")
 
-        result = analyze_resume_structured(resume_text, job_title, experience_level)
+        result = analyze_resume_structured(resume_text, f"Target role: {job_title}")
         return result
 
     except HTTPException:
@@ -398,15 +505,28 @@ async def generate_interview_questions(
 @app.post("/jobs")
 async def search_jobs(
     job_title: str = Form(...),
-    skills_summary: str = Form(...),
+    skills_summary: str = Form(""),
+    skills_list: str = Form(""),  # comma-separated list of skills
 ):
     """
-    Search for matching jobs (step 3 of pipeline).
+    Search for matching jobs using Firecrawl (Agent 3: Zara).
+    Accepts job_title, skills_summary, and optional comma-separated skills_list.
     """
     try:
         from agents.job_search_agent import find_jobs
-        
-        jobs = find_jobs(job_title, skills_summary=skills_summary)
+        from agents.memory_agent import save_job_search
+
+        parsed_skills = [s.strip() for s in skills_list.split(",") if s.strip()] if skills_list else []
+
+        jobs = find_jobs(
+            job_title=job_title,
+            skills_summary=skills_summary,
+            skills_list=parsed_skills,
+        )
+        try:
+            save_job_search("default", job_title, skills_summary)
+        except Exception:
+            pass
         return {"jobs": jobs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Job search error: {str(e)}")

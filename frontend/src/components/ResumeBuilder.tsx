@@ -1,647 +1,555 @@
 /**
- * ResumeBuilder.tsx — AI-Powered Resume Builder with Live Preview
+ * ResumeBuilder.tsx — Open-Resume Inspired Form + Live A4 Preview
  *
- * Split-panel layout:
- *  Left  40%  — Section accordion editor with AI Enhance / Generate buttons
- *  Right 60%  — Live A4 HTML/CSS preview that updates as you type
+ * Matches the open-resume form accordion pattern:
+ *   Profile, Work Experiences, Projects, Education, Skills
  *
- * Features inspired by open-resume:
- *  - Real-time preview rendering
- *  - Per-section AI enhancement
- *  - Professional summary AI generation
- *  - PDF download via window.print()
+ * AI features:
+ *   - ✨ Enhance: rewrites bullets/text via POST /resume/improve
+ *   - 🤖 Generate: writes section from scratch via POST /resume/generate-section
+ *
+ * PDF: window.print() with the A4 preview content
+ * Builder state is shared upward so ResumeAnalyzer can "Analyze Current Resume"
  */
 
-import { useState, useRef } from "react";
+import { useState, useCallback } from "react";
 import {
-  Sparkles,
-  RefreshCw,
-  Download,
-  Plus,
-  Trash2,
-  ChevronDown,
-  ChevronUp,
-  Loader2,
+  Plus, Trash2, Download, Sparkles, RefreshCw, Loader2,
+  ChevronDown, ChevronUp, User, Briefcase, GraduationCap,
+  Code2, Layers,
 } from "lucide-react";
-import { improveResumeSection, generateResumeSection } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
-// ── Types ────────────────────────────────────────────────────────────────────
+// ── Types ──────────────────────────────────────────────────────────────────────
 
-interface WorkEntry {
+interface WorkExp {
   id: string;
   company: string;
-  role: string;
-  duration: string;
-  bullets: string;
-}
-interface EduEntry {
-  id: string;
-  institution: string;
-  degree: string;
-  year: string;
-  gpa: string;
-}
-interface ProjectEntry {
-  id: string;
-  name: string;
-  tech: string;
-  description: string;
+  jobTitle: string;
+  date: string;
+  descriptions: string[];
 }
 
-interface ResumeData {
-  firstName: string;
-  lastName: string;
+interface Project {
+  id: string;
+  project: string;
+  date: string;
+  descriptions: string[];
+}
+
+interface Education {
+  id: string;
+  school: string;
+  degree: string;
+  date: string;
+  gpa: string;
+  descriptions: string[];
+}
+
+interface Profile {
+  name: string;
   email: string;
   phone: string;
-  linkedin: string;
-  github: string;
   location: string;
+  url: string;
   summary: string;
-  skills: string;
-  experience: WorkEntry[];
-  education: EduEntry[];
-  projects: ProjectEntry[];
 }
+
+interface ResumeState {
+  profile: Profile;
+  workExperiences: WorkExp[];
+  projects: Project[];
+  educations: Education[];
+  skills: { descriptions: string[] };
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────────
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-const DEFAULT_DATA: ResumeData = {
-  firstName: "",
-  lastName: "",
-  email: "",
-  phone: "",
-  linkedin: "",
-  github: "",
-  location: "",
-  summary: "",
-  skills: "",
-  experience: [{ id: uid(), company: "", role: "", duration: "", bullets: "" }],
-  education: [{ id: uid(), institution: "", degree: "", year: "", gpa: "" }],
-  projects: [{ id: uid(), name: "", tech: "", description: "" }],
+const API_BASE = "http://localhost:8000";
+
+async function improveSection(text: string, context = ""): Promise<string> {
+  const res = await fetch(`${API_BASE}/resume/improve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text, context }),
+  });
+  if (!res.ok) throw new Error("Improve failed");
+  const data = await res.json();
+  return data.improved || text;
+}
+
+async function generateSection(sectionName: string, context: string, jobTitle: string): Promise<string> {
+  const res = await fetch(`${API_BASE}/resume/generate-section`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ section_name: sectionName, context, job_title: jobTitle }),
+  });
+  if (!res.ok) throw new Error("Generate failed");
+  const data = await res.json();
+  return data.generated_content || "";
+}
+
+/** Convert the resume state into plain text for the analyzer */
+export function resumeStateToText(state: ResumeState): string {
+  const lines: string[] = [];
+  const { profile, workExperiences, educations, skills, projects } = state;
+
+  if (profile.name) lines.push(profile.name);
+  if (profile.email) lines.push(profile.email);
+  if (profile.phone) lines.push(profile.phone);
+  if (profile.location) lines.push(profile.location);
+  if (profile.url) lines.push(profile.url);
+  if (profile.summary) lines.push(`\nSUMMARY\n${profile.summary}`);
+
+  if (workExperiences.length > 0) {
+    lines.push("\nWORK EXPERIENCE");
+    workExperiences.forEach((e) => {
+      lines.push(`${e.jobTitle} at ${e.company} (${e.date})`);
+      e.descriptions.forEach((d) => d && lines.push(`• ${d}`));
+    });
+  }
+
+  if (educations.length > 0) {
+    lines.push("\nEDUCATION");
+    educations.forEach((e) => {
+      lines.push(`${e.degree} from ${e.school} (${e.date})`);
+      if (e.gpa) lines.push(`GPA: ${e.gpa}`);
+    });
+  }
+
+  if (skills.descriptions.length > 0) {
+    lines.push("\nSKILLS");
+    lines.push(skills.descriptions.join(", "));
+  }
+
+  if (projects.length > 0) {
+    lines.push("\nPROJECTS");
+    projects.forEach((p) => {
+      lines.push(`${p.project} (${p.date})`);
+      p.descriptions.forEach((d) => d && lines.push(`• ${d}`));
+    });
+  }
+
+  return lines.join("\n");
+}
+
+// ── Default State ──────────────────────────────────────────────────────────────
+
+const defaultExp = (): WorkExp => ({
+  id: uid(), company: "", jobTitle: "", date: "", descriptions: [""],
+});
+const defaultProj = (): Project => ({
+  id: uid(), project: "", date: "", descriptions: [""],
+});
+const defaultEdu = (): Education => ({
+  id: uid(), school: "", degree: "", date: "", gpa: "", descriptions: [],
+});
+
+const DEFAULT: ResumeState = {
+  profile: { name: "", email: "", phone: "", location: "", url: "", summary: "" },
+  workExperiences: [defaultExp()],
+  projects: [defaultProj()],
+  educations: [defaultEdu()],
+  skills: { descriptions: [""] },
 };
 
-// ── Section Accordion Wrapper ────────────────────────────────────────────────
+// ── Small UI Helpers ──────────────────────────────────────────────────────────
 
-const Accordion = ({
-  title,
-  children,
-  defaultOpen = false,
-}: {
-  title: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) => {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="border border-border rounded-xl overflow-hidden">
-      <button
-        onClick={() => setOpen((p) => !p)}
-        className="w-full flex items-center justify-between px-4 py-3 bg-secondary hover:bg-secondary/80 transition-colors text-left"
-      >
-        <span className="text-sm font-bold text-foreground">{title}</span>
-        {open ? (
-          <ChevronUp size={14} className="text-muted-foreground" />
-        ) : (
-          <ChevronDown size={14} className="text-muted-foreground" />
-        )}
-      </button>
-      {open && <div className="px-4 pb-4 pt-3 space-y-3">{children}</div>}
-    </div>
-  );
-};
-
-// ── Input helpers ────────────────────────────────────────────────────────────
+const inp = "w-full bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 focus:border-red-500/60 focus:outline-none transition-colors";
+const ta = "w-full bg-[#0a0a0a] border border-[#2a2a2a] rounded-lg px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 focus:border-red-500/60 focus:outline-none transition-colors resize-none";
 
 const Label = ({ children }: { children: React.ReactNode }) => (
-  <label className="block text-xs font-semibold text-muted-foreground mb-1 uppercase tracking-wider">
-    {children}
-  </label>
+  <label className="block text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">{children}</label>
 );
 
-const inp =
-  "w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-baymax-red focus:outline-none transition-colors";
+const SectionHeader = ({
+  icon, title, open, toggle
+}: { icon: React.ReactNode; title: string; open: boolean; toggle: () => void }) => (
+  <button
+    onClick={toggle}
+    className="w-full flex items-center justify-between px-4 py-3 transition-colors text-left"
+    style={{ background: "#161616", borderBottom: open ? "1px solid #2a2a2a" : "none" }}
+  >
+    <span className="flex items-center gap-2 text-sm font-bold text-gray-200">{icon}{title}</span>
+    {open ? <ChevronUp size={14} className="text-gray-500" /> : <ChevronDown size={14} className="text-gray-500" />}
+  </button>
+);
 
-const ta =
-  "w-full bg-background border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-baymax-red focus:outline-none transition-colors resize-none";
-
-// ── AI Enhance Button ────────────────────────────────────────────────────────
-
-const AIButton = ({
-  label,
-  loading,
-  onClick,
-  variant = "enhance",
-}: {
-  label: string;
-  loading: boolean;
-  onClick: () => void;
-  variant?: "enhance" | "generate";
-}) => (
+const AIBtn = ({
+  label, loading, onClick, variant = "enhance"
+}: { label: string; loading: boolean; onClick: () => void; variant?: "enhance" | "generate" }) => (
   <button
     onClick={onClick}
     disabled={loading}
-    className={`flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg transition-all disabled:opacity-50 ${
+    className={`flex items-center gap-1 text-xs font-bold px-2.5 py-1.5 rounded-lg transition-all disabled:opacity-50 ${
       variant === "generate"
         ? "bg-purple-500/10 border border-purple-500/30 text-purple-400 hover:bg-purple-500/20"
-        : "bg-baymax-red/10 border border-baymax-red/30 text-baymax-red hover:bg-baymax-red/20"
+        : "bg-red-500/10 border border-red-500/30 text-red-400 hover:bg-red-500/20"
     }`}
   >
-    {loading ? (
-      <Loader2 size={12} className="animate-spin" />
-    ) : variant === "generate" ? (
-      <RefreshCw size={12} />
-    ) : (
-      <Sparkles size={12} />
-    )}
+    {loading
+      ? <Loader2 size={11} className="animate-spin" />
+      : variant === "generate" ? <RefreshCw size={11} /> : <Sparkles size={11} />}
     {label}
   </button>
 );
 
-// ── Live Preview HTML ────────────────────────────────────────────────────────
+// ── Live Preview HTML Builder ──────────────────────────────────────────────────
 
-const buildPreviewHTML = (d: ResumeData): string => {
-  const fullName = `${d.firstName} ${d.lastName}`.trim() || "Your Name";
+function buildHTML(d: ResumeState): string {
+  const p = d.profile;
+  const name = p.name || "Your Name";
+  const contact = [p.email, p.phone, p.location].filter(Boolean).join(" · ");
+  const links = [
+    p.url ? `<a href="${p.url}" style="color:#e53e3e">${p.url.replace(/https?:\/\//, "")}</a>` : ""
+  ].filter(Boolean).join(" · ");
 
-  const contactParts = [d.email, d.phone, d.location].filter(Boolean).join(" • ");
-  const linkParts = [
-    d.linkedin ? `<a href="${d.linkedin}" style="color:#1a73e8">LinkedIn</a>` : "",
-    d.github ? `<a href="${d.github}" style="color:#1a73e8">GitHub</a>` : "",
-  ]
-    .filter(Boolean)
-    .join(" • ");
-
-  const expHTML = d.experience
-    .filter((e) => e.company || e.role)
-    .map(
-      (e) => `
-    <div style="margin-bottom:10px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <strong style="font-size:13px">${e.role || "Role"}</strong>
-        <span style="font-size:11px;color:#555">${e.duration}</span>
+  const section = (title: string, html: string) => !html.trim() ? "" : `
+    <div style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px">
+        <span style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:#e53e3e">${title}</span>
+        <div style="flex:1;height:1px;background:#e53e3e;opacity:0.4"></div>
       </div>
-      <div style="font-size:12px;color:#444;margin-bottom:4px">${e.company}</div>
-      ${
-        e.bullets
-          ? `<ul style="margin:0;padding-left:16px;font-size:12px;color:#333;line-height:1.6">
-          ${e.bullets
-            .split("\n")
-            .filter(Boolean)
-            .map((b) => `<li>${b.replace(/^[-•]\s*/, "")}</li>`)
-            .join("")}
-        </ul>`
-          : ""
-      }
-    </div>`
-    )
-    .join("");
+      ${html}
+    </div>`;
 
-  const eduHTML = d.education
-    .filter((e) => e.institution || e.degree)
-    .map(
-      (e) => `
-    <div style="margin-bottom:8px">
-      <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <strong style="font-size:13px">${e.degree || "Degree"}</strong>
-        <span style="font-size:11px;color:#555">${e.year}</span>
-      </div>
-      <div style="font-size:12px;color:#444">${e.institution}${e.gpa ? ` — GPA: ${e.gpa}` : ""}</div>
-    </div>`
-    )
-    .join("");
+  const expHTML = d.workExperiences
+    .filter((e) => e.company || e.jobTitle)
+    .map((e) => `
+      <div style="margin-bottom:9px">
+        <div style="display:flex;justify-content:space-between">
+          <strong style="font-size:12.5px">${e.jobTitle || "Role"}</strong>
+          <span style="font-size:11px;color:#666">${e.date}</span>
+        </div>
+        <div style="font-size:11.5px;color:#555;margin-bottom:3px">${e.company}</div>
+        ${e.descriptions.filter(Boolean).length > 0
+          ? `<ul style="margin:0;padding-left:14px;font-size:11.5px;color:#333;line-height:1.6">${
+              e.descriptions.filter(Boolean).map((d) => `<li>${d.replace(/^[-•]\s*/, "")}</li>`).join("")
+            }</ul>`
+          : ""}
+      </div>`).join("");
+
+  const eduHTML = d.educations
+    .filter((e) => e.school || e.degree)
+    .map((e) => `
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between">
+          <strong style="font-size:12.5px">${e.degree || "Degree"}</strong>
+          <span style="font-size:11px;color:#666">${e.date}</span>
+        </div>
+        <div style="font-size:11.5px;color:#555">${e.school}${e.gpa ? ` · GPA: ${e.gpa}` : ""}</div>
+      </div>`).join("");
 
   const projHTML = d.projects
-    .filter((p) => p.name || p.description)
-    .map(
-      (p) => `
-    <div style="margin-bottom:8px">
-      <strong style="font-size:13px">${p.name}${p.tech ? ` <span style="font-weight:normal;color:#555;font-size:11px">— ${p.tech}</span>` : ""}</strong>
-      <div style="font-size:12px;color:#333;margin-top:2px">${p.description}</div>
-    </div>`
-    )
-    .join("");
+    .filter((p) => p.project || p.descriptions.some(Boolean))
+    .map((p) => `
+      <div style="margin-bottom:8px">
+        <div style="display:flex;justify-content:space-between">
+          <strong style="font-size:12.5px">${p.project || "Project"}</strong>
+          <span style="font-size:11px;color:#666">${p.date}</span>
+        </div>
+        ${p.descriptions.filter(Boolean).length > 0
+          ? `<ul style="margin:2px 0 0;padding-left:14px;font-size:11.5px;color:#333;line-height:1.6">${
+              p.descriptions.filter(Boolean).map((d) => `<li>${d.replace(/^[-•]\s*/, "")}</li>`).join("")
+            }</ul>`
+          : ""}
+      </div>`).join("");
 
-  const section = (title: string, content: string) =>
-    content.trim()
-      ? `<div style="margin-bottom:14px">
-          <div style="border-bottom:1.5px solid #E8272B;margin-bottom:6px;padding-bottom:2px">
-            <span style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:#E8272B">${title}</span>
-          </div>
-          ${content}
-        </div>`
-      : "";
+  const skillsHTML = d.skills.descriptions.filter(Boolean).join(", ");
 
   return `<!DOCTYPE html><html><head><meta charset="UTF-8">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Georgia', serif; font-size: 13px; color: #1a1a1a; background: white; }
-    a { color: #1a73e8; text-decoration: none; }
-  </style>
-  </head><body style="padding:32px 36px;max-width:794px;margin:0 auto">
-    <div style="text-align:center;margin-bottom:16px">
-      <h1 style="font-size:22px;font-weight:700;letter-spacing:0.03em;color:#111">${fullName}</h1>
-      ${contactParts ? `<div style="font-size:11.5px;color:#444;margin-top:4px">${contactParts}</div>` : ""}
-      ${linkParts ? `<div style="font-size:11.5px;margin-top:2px">${linkParts}</div>` : ""}
-    </div>
-    ${section("Professional Summary", d.summary ? `<p style="font-size:12.5px;color:#333;line-height:1.55">${d.summary}</p>` : "")}
-    ${section("Experience", expHTML)}
-    ${section("Education", eduHTML)}
-    ${section("Skills", d.skills ? `<p style="font-size:12px;color:#333;line-height:1.6">${d.skills}</p>` : "")}
-    ${section("Projects", projHTML)}
-  </body></html>`;
-};
+<style>*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Times New Roman',Times,serif;font-size:12px;color:#1a1a1a;background:white;padding:36px 40px;max-width:794px;margin:auto}
+a{color:#e53e3e;text-decoration:none}</style></head>
+<body>
+  <div style="text-align:center;margin-bottom:14px">
+    <h1 style="font-size:22px;font-weight:700;letter-spacing:0.02em">${name}</h1>
+    ${contact ? `<div style="font-size:11px;color:#555;margin-top:3px">${contact}</div>` : ""}
+    ${links ? `<div style="font-size:11px;margin-top:2px">${links}</div>` : ""}
+  </div>
+  ${section("Professional Summary", p.summary ? `<p style="font-size:12px;color:#333;line-height:1.55">${p.summary}</p>` : "")}
+  ${section("Work Experience", expHTML)}
+  ${section("Education", eduHTML)}
+  ${section("Skills", skillsHTML ? `<p style="font-size:12px;color:#333;line-height:1.6">${skillsHTML}</p>` : "")}
+  ${section("Projects", projHTML)}
+</body></html>`;
+}
 
-// ── Main Component ───────────────────────────────────────────────────────────
+// ── Main Component ─────────────────────────────────────────────────────────────
 
 interface Props {
   jobTitle?: string;
+  onResumeTextChange?: (text: string) => void;
 }
 
-const ResumeBuilder = ({ jobTitle = "" }: Props) => {
+const ResumeBuilder = ({ jobTitle = "", onResumeTextChange }: Props) => {
   const { toast } = useToast();
-  const [data, setData] = useState<ResumeData>(DEFAULT_DATA);
+  const [data, setData] = useState<ResumeState>(DEFAULT);
   const [aiLoading, setAiLoading] = useState<Record<string, boolean>>({});
-  const previewRef = useRef<HTMLIFrameElement>(null);
+  const [openSections, setOpenSections] = useState({ profile: true, exp: true, edu: false, skills: false, proj: false });
 
-  const set = (key: keyof ResumeData, value: unknown) =>
-    setData((d) => ({ ...d, [key]: value }));
+  const toggleSection = (s: keyof typeof openSections) =>
+    setOpenSections((p) => ({ ...p, [s]: !p[s] }));
 
-  // ── AI helpers ─────────────────────────────────────────────────────────────
+  const update = useCallback(<K extends keyof ResumeState>(key: K, val: ResumeState[K]) => {
+    setData((d) => {
+      const next = { ...d, [key]: val };
+      onResumeTextChange?.(resumeStateToText(next));
+      return next;
+    });
+  }, [onResumeTextChange]);
 
-  const setLoading = (key: string, v: boolean) =>
-    setAiLoading((p) => ({ ...p, [key]: v }));
+  const setLoading = (k: string, v: boolean) => setAiLoading((p) => ({ ...p, [k]: v }));
 
-  const enhance = async (
-    loadKey: string,
-    sectionName: string,
-    content: string,
-    onResult: (v: string) => void
-  ) => {
-    if (!content.trim()) {
-      toast({ title: "Nothing to enhance", description: "Add some content first", variant: "destructive" });
-      return;
-    }
-    setLoading(loadKey, true);
+  // ── AI actions ───────────────────────────────────────────────────────────────
+
+  const enhance = async (k: string, text: string, ctx: string, onResult: (v: string) => void) => {
+    if (!text.trim()) { toast({ title: "Nothing to enhance", variant: "destructive" }); return; }
+    setLoading(k, true);
     try {
-      const { improved_content } = await improveResumeSection(sectionName, content, jobTitle || "Software Engineer");
-      onResult(improved_content);
-      toast({ title: "✨ Enhanced!", description: "AI improved your content" });
-    } catch (e) {
-      toast({ title: "Enhancement failed", description: (e as Error).message, variant: "destructive" });
-    } finally {
-      setLoading(loadKey, false);
-    }
+      const improved = await improveSection(text, ctx);
+      onResult(improved);
+      toast({ title: "✨ Enhanced!" });
+    } catch { toast({ title: "Enhance failed", variant: "destructive" }); }
+    finally { setLoading(k, false); }
   };
 
-  const generate = async (
-    loadKey: string,
-    sectionName: string,
-    context: string,
-    onResult: (v: string) => void
-  ) => {
-    setLoading(loadKey, true);
+  const generate = async (k: string, section: string, ctx: string, onResult: (v: string) => void) => {
+    setLoading(k, true);
     try {
-      const { generated_content } = await generateResumeSection(sectionName, context, jobTitle || "Software Engineer");
-      onResult(generated_content);
-      toast({ title: "🤖 Generated!", description: "AI wrote your content" });
-    } catch (e) {
-      toast({ title: "Generation failed", description: (e as Error).message, variant: "destructive" });
-    } finally {
-      setLoading(loadKey, false);
-    }
+      const generated = await generateSection(section, ctx, jobTitle || "Software Engineer");
+      onResult(generated);
+      toast({ title: "🤖 Generated!" });
+    } catch { toast({ title: "Generation failed", variant: "destructive" }); }
+    finally { setLoading(k, false); }
   };
 
-  // ── Work experience helpers ────────────────────────────────────────────────
+  // ── Work Experience CRUD ─────────────────────────────────────────────────────
 
-  const addExp = () =>
-    set("experience", [...data.experience, { id: uid(), company: "", role: "", duration: "", bullets: "" }]);
-  const removeExp = (id: string) =>
-    set("experience", data.experience.filter((e) => e.id !== id));
-  const updateExp = (id: string, field: keyof WorkEntry, val: string) =>
-    set(
-      "experience",
-      data.experience.map((e) => (e.id === id ? { ...e, [field]: val } : e))
-    );
+  const addExp = () => update("workExperiences", [...data.workExperiences, defaultExp()]);
+  const removeExp = (id: string) => update("workExperiences", data.workExperiences.filter((e) => e.id !== id));
+  const setExp = (id: string, field: keyof WorkExp, val: unknown) =>
+    update("workExperiences", data.workExperiences.map((e) => e.id === id ? { ...e, [field]: val } : e));
+  const setExpBullet = (id: string, i: number, val: string) =>
+    setExp(id, "descriptions", data.workExperiences.find((e) => e.id === id)!.descriptions.map((d, j) => j === i ? val : d));
+  const addExpBullet = (id: string) =>
+    setExp(id, "descriptions", [...(data.workExperiences.find((e) => e.id === id)?.descriptions || []), ""]);
 
-  // ── Education helpers ──────────────────────────────────────────────────────
+  // ── Project CRUD ──────────────────────────────────────────────────────────────
 
-  const addEdu = () =>
-    set("education", [...data.education, { id: uid(), institution: "", degree: "", year: "", gpa: "" }]);
-  const removeEdu = (id: string) =>
-    set("education", data.education.filter((e) => e.id !== id));
-  const updateEdu = (id: string, field: keyof EduEntry, val: string) =>
-    set(
-      "education",
-      data.education.map((e) => (e.id === id ? { ...e, [field]: val } : e))
-    );
+  const addProj = () => update("projects", [...data.projects, defaultProj()]);
+  const removeProj = (id: string) => update("projects", data.projects.filter((p) => p.id !== id));
+  const setProj = (id: string, field: keyof Project, val: unknown) =>
+    update("projects", data.projects.map((p) => p.id === id ? { ...p, [field]: val } : p));
+  const setProjBullet = (id: string, i: number, val: string) =>
+    setProj(id, "descriptions", data.projects.find((p) => p.id === id)!.descriptions.map((d, j) => j === i ? val : d));
+  const addProjBullet = (id: string) =>
+    setProj(id, "descriptions", [...(data.projects.find((p) => p.id === id)?.descriptions || []), ""]);
 
-  // ── Project helpers ────────────────────────────────────────────────────────
+  // ── Education CRUD ────────────────────────────────────────────────────────────
 
-  const addProj = () =>
-    set("projects", [...data.projects, { id: uid(), name: "", tech: "", description: "" }]);
-  const removeProj = (id: string) =>
-    set("projects", data.projects.filter((p) => p.id !== id));
-  const updateProj = (id: string, field: keyof ProjectEntry, val: string) =>
-    set(
-      "projects",
-      data.projects.map((p) => (p.id === id ? { ...p, [field]: val } : p))
-    );
+  const addEdu = () => update("educations", [...data.educations, defaultEdu()]);
+  const removeEdu = (id: string) => update("educations", data.educations.filter((e) => e.id !== id));
+  const setEdu = (id: string, field: keyof Education, val: unknown) =>
+    update("educations", data.educations.map((e) => e.id === id ? { ...e, [field]: val } : e));
 
-  // ── PDF Download ───────────────────────────────────────────────────────────
+  // ── PDF Download ──────────────────────────────────────────────────────────────
 
   const downloadPDF = () => {
-    const html = buildPreviewHTML(data);
     const win = window.open("", "_blank");
-    if (!win) {
-      toast({ title: "Popup blocked", description: "Allow popups for PDF download", variant: "destructive" });
-      return;
-    }
-    win.document.write(html);
+    if (!win) { toast({ title: "Popup blocked", variant: "destructive" }); return; }
+    win.document.write(buildHTML(data));
     win.document.close();
     win.focus();
-    setTimeout(() => { win.print(); }, 300);
+    setTimeout(() => win.print(), 400);
   };
 
-  const previewHTML = buildPreviewHTML(data);
+  const previewBody = buildHTML(data).replace(/<!DOCTYPE[\s\S]*?<body[^>]*>/, "").replace(/<\/body>[\s\S]*$/, "");
 
   return (
-    <div className="grid md:grid-cols-[420px_1fr] gap-0 h-[680px] rounded-xl overflow-hidden border border-border">
-      {/* ── Editor Panel ─────────────────────────────────────────────────── */}
-      <div className="overflow-y-auto bg-[#0a0a0a] border-r border-border p-4 space-y-3">
-        <div className="flex items-center justify-between sticky top-0 bg-[#0a0a0a] py-1 z-10 pb-3 border-b border-border mb-1">
-          <p className="text-sm font-bold text-foreground">📝 Resume Editor</p>
-          {jobTitle && (
-            <span className="text-xs text-baymax-red bg-baymax-red/10 px-2 py-0.5 rounded-full">
-              {jobTitle}
-            </span>
+    <div
+      className="grid md:grid-cols-[440px_1fr] gap-0 rounded-xl overflow-hidden border border-[#1f1f1f]"
+      style={{ height: "680px" }}
+    >
+      {/* ── Editor Panel ──────────────────────────────────────────────── */}
+      <div className="overflow-y-auto flex flex-col" style={{ background: "#0f0f0f", borderRight: "1px solid #1f1f1f" }}>
+
+        {/* Sticky header */}
+        <div className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-[#1f1f1f]" style={{ background: "#0f0f0f" }}>
+          <span className="text-sm font-bold text-gray-200">📝 Resume Editor</span>
+          {jobTitle && <span className="text-xs text-red-400 bg-red-500/10 px-2 py-0.5 rounded-full border border-red-500/20">{jobTitle}</span>}
+        </div>
+
+        {/* ── Profile Section ── */}
+        <div className="border-b border-[#1f1f1f]">
+          <SectionHeader icon={<User size={14} className="text-red-400" />} title="Profile & Contact" open={openSections.profile} toggle={() => toggleSection("profile")} />
+          {openSections.profile && (
+            <div className="p-4 space-y-3">
+              <div className="grid grid-cols-2 gap-2">
+                <div><Label>First Name</Label><input className={inp} placeholder="John" value={data.profile.name.split(" ")[0] || ""} onChange={(e) => update("profile", { ...data.profile, name: `${e.target.value} ${data.profile.name.split(" ").slice(1).join(" ")}`.trim() })} /></div>
+                <div><Label>Last Name</Label><input className={inp} placeholder="Doe" value={data.profile.name.split(" ").slice(1).join(" ") || ""} onChange={(e) => update("profile", { ...data.profile, name: `${data.profile.name.split(" ")[0] || ""} ${e.target.value}`.trim() })} /></div>
+              </div>
+              <div><Label>Email</Label><input className={inp} placeholder="john@example.com" value={data.profile.email} onChange={(e) => update("profile", { ...data.profile, email: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><Label>Phone</Label><input className={inp} placeholder="+92 300 0000000" value={data.profile.phone} onChange={(e) => update("profile", { ...data.profile, phone: e.target.value })} /></div>
+                <div><Label>Location</Label><input className={inp} placeholder="Lahore, PK" value={data.profile.location} onChange={(e) => update("profile", { ...data.profile, location: e.target.value })} /></div>
+              </div>
+              <div><Label>LinkedIn / Portfolio URL</Label><input className={inp} placeholder="linkedin.com/in/johndoe" value={data.profile.url} onChange={(e) => update("profile", { ...data.profile, url: e.target.value })} /></div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <Label>Professional Summary</Label>
+                  <div className="flex gap-1">
+                    <AIBtn label="Enhance" loading={!!aiLoading["summary-e"]} onClick={() => enhance("summary-e", data.profile.summary, `Summary for ${jobTitle || "Software Engineer"}`, (v) => update("profile", { ...data.profile, summary: v }))} />
+                    <AIBtn label="Generate" loading={!!aiLoading["summary-g"]} variant="generate" onClick={() => generate("summary-g", "Professional Summary", `Name: ${data.profile.name}, Target role: ${jobTitle || "Software Engineer"}`, (v) => update("profile", { ...data.profile, summary: v }))} />
+                  </div>
+                </div>
+                <textarea className={ta} rows={3} placeholder="Results-driven engineer with 2+ years..." value={data.profile.summary} onChange={(e) => update("profile", { ...data.profile, summary: e.target.value })} />
+              </div>
+            </div>
           )}
         </div>
 
-        {/* Contact Info */}
-        <Accordion title="📇 Contact Information" defaultOpen={true}>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <Label>First Name</Label>
-              <input className={inp} placeholder="John" value={data.firstName} onChange={(e) => set("firstName", e.target.value)} />
+        {/* ── Work Experience Section ── */}
+        <div className="border-b border-[#1f1f1f]">
+          <SectionHeader icon={<Briefcase size={14} className="text-red-400" />} title="Work Experience" open={openSections.exp} toggle={() => toggleSection("exp")} />
+          {openSections.exp && (
+            <div className="p-4 space-y-4">
+              {data.workExperiences.map((exp, idx) => (
+                <div key={exp.id} className="rounded-xl p-3 space-y-2.5" style={{ background: "#111111", border: "1px solid #2a2a2a" }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-gray-500">Position {idx + 1}</span>
+                    {data.workExperiences.length > 1 && (
+                      <button onClick={() => removeExp(exp.id)} className="text-red-500 hover:text-red-300"><Trash2 size={13} /></button>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><Label>Company</Label><input className={inp} placeholder="Acme Corp" value={exp.company} onChange={(e) => setExp(exp.id, "company", e.target.value)} /></div>
+                    <div><Label>Duration</Label><input className={inp} placeholder="Jun 2022 – Present" value={exp.date} onChange={(e) => setExp(exp.id, "date", e.target.value)} /></div>
+                  </div>
+                  <div><Label>Job Title</Label><input className={inp} placeholder="Software Engineer" value={exp.jobTitle} onChange={(e) => setExp(exp.id, "jobTitle", e.target.value)} /></div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <Label>Bullet Points</Label>
+                      <AIBtn
+                        label="Enhance"
+                        loading={!!aiLoading[`exp-${exp.id}`]}
+                        onClick={() => enhance(`exp-${exp.id}`, exp.descriptions.filter(Boolean).join("\n"), `${exp.jobTitle} at ${exp.company}`, (v) => setExp(exp.id, "descriptions", v.split("\n").filter(Boolean)))}
+                      />
+                    </div>
+                    {exp.descriptions.map((d, i) => (
+                      <input key={i} className={`${inp} mb-1.5`} placeholder={`• Bullet ${i + 1}`} value={d} onChange={(e) => setExpBullet(exp.id, i, e.target.value)} />
+                    ))}
+                    <button onClick={() => addExpBullet(exp.id)} className="text-xs text-red-400 hover:text-red-300 font-bold mt-0.5">+ Add bullet</button>
+                  </div>
+                </div>
+              ))}
+              <button onClick={addExp} className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 font-bold"><Plus size={13} /> Add Position</button>
             </div>
-            <div>
-              <Label>Last Name</Label>
-              <input className={inp} placeholder="Doe" value={data.lastName} onChange={(e) => set("lastName", e.target.value)} />
-            </div>
-          </div>
-          <div>
-            <Label>Email</Label>
-            <input className={inp} placeholder="john@example.com" value={data.email} onChange={(e) => set("email", e.target.value)} />
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <Label>Phone</Label>
-              <input className={inp} placeholder="+92 300 0000000" value={data.phone} onChange={(e) => set("phone", e.target.value)} />
-            </div>
-            <div>
-              <Label>Location</Label>
-              <input className={inp} placeholder="Lahore, PK" value={data.location} onChange={(e) => set("location", e.target.value)} />
-            </div>
-          </div>
-          <div>
-            <Label>LinkedIn URL</Label>
-            <input className={inp} placeholder="linkedin.com/in/johndoe" value={data.linkedin} onChange={(e) => set("linkedin", e.target.value)} />
-          </div>
-          <div>
-            <Label>GitHub URL</Label>
-            <input className={inp} placeholder="github.com/johndoe" value={data.github} onChange={(e) => set("github", e.target.value)} />
-          </div>
-        </Accordion>
+          )}
+        </div>
 
-        {/* Professional Summary */}
-        <Accordion title="📋 Professional Summary" defaultOpen={true}>
-          <div className="flex gap-2 mb-2">
-            <AIButton
-              label="✨ Enhance"
-              loading={!!aiLoading["summary-enhance"]}
-              onClick={() =>
-                enhance("summary-enhance", "Professional Summary", data.summary, (v) => set("summary", v))
-              }
-            />
-            <AIButton
-              label="🤖 Generate"
-              loading={!!aiLoading["summary-generate"]}
-              variant="generate"
-              onClick={() =>
-                generate(
-                  "summary-generate",
-                  "Professional Summary",
-                  `Name: ${data.firstName} ${data.lastName}, Target role: ${jobTitle || "Software Engineer"}`,
-                  (v) => set("summary", v)
-                )
-              }
-            />
-          </div>
-          <textarea
-            className={ta}
-            rows={4}
-            placeholder="Write 2-3 sentences about your experience, skills, and what you bring to the target role..."
-            value={data.summary}
-            onChange={(e) => set("summary", e.target.value)}
-          />
-        </Accordion>
+        {/* ── Education Section ── */}
+        <div className="border-b border-[#1f1f1f]">
+          <SectionHeader icon={<GraduationCap size={14} className="text-red-400" />} title="Education" open={openSections.edu} toggle={() => toggleSection("edu")} />
+          {openSections.edu && (
+            <div className="p-4 space-y-4">
+              {data.educations.map((edu, idx) => (
+                <div key={edu.id} className="rounded-xl p-3 space-y-2.5" style={{ background: "#111111", border: "1px solid #2a2a2a" }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-gray-500">Entry {idx + 1}</span>
+                    {data.educations.length > 1 && <button onClick={() => removeEdu(edu.id)} className="text-red-500"><Trash2 size={13} /></button>}
+                  </div>
+                  <div><Label>Institution</Label><input className={inp} placeholder="FAST-NUCES" value={edu.school} onChange={(e) => setEdu(edu.id, "school", e.target.value)} /></div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><Label>Degree</Label><input className={inp} placeholder="BS Computer Science" value={edu.degree} onChange={(e) => setEdu(edu.id, "degree", e.target.value)} /></div>
+                    <div><Label>Year</Label><input className={inp} placeholder="2024" value={edu.date} onChange={(e) => setEdu(edu.id, "date", e.target.value)} /></div>
+                  </div>
+                  <div><Label>GPA (optional)</Label><input className={inp} placeholder="3.8 / 4.0" value={edu.gpa} onChange={(e) => setEdu(edu.id, "gpa", e.target.value)} /></div>
+                </div>
+              ))}
+              <button onClick={addEdu} className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 font-bold"><Plus size={13} /> Add Education</button>
+            </div>
+          )}
+        </div>
 
-        {/* Work Experience */}
-        <Accordion title="💼 Work Experience" defaultOpen={true}>
-          {data.experience.map((exp, idx) => (
-            <div key={exp.id} className="space-y-2 pb-3 border-b border-border last:border-0">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-muted-foreground">Position {idx + 1}</span>
-                {data.experience.length > 1 && (
-                  <button onClick={() => removeExp(exp.id)} className="text-red-400 hover:text-red-300 transition-colors">
-                    <Trash2 size={13} />
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label>Company</Label>
-                  <input className={inp} placeholder="Acme Corp" value={exp.company} onChange={(e) => updateExp(exp.id, "company", e.target.value)} />
+        {/* ── Skills Section ── */}
+        <div className="border-b border-[#1f1f1f]">
+          <SectionHeader icon={<Code2 size={14} className="text-red-400" />} title="Skills" open={openSections.skills} toggle={() => toggleSection("skills")} />
+          {openSections.skills && (
+            <div className="p-4 space-y-2">
+              {data.skills.descriptions.map((s, i) => (
+                <div key={i} className="flex gap-2">
+                  <input className={inp} placeholder={`e.g. Languages: Python, JS, TypeScript`} value={s} onChange={(e) => { const d = [...data.skills.descriptions]; d[i] = e.target.value; update("skills", { descriptions: d }); }} />
+                  {data.skills.descriptions.length > 1 && (
+                    <button onClick={() => { const d = data.skills.descriptions.filter((_, j) => j !== i); update("skills", { descriptions: d }); }} className="text-red-500"><Trash2 size={13} /></button>
+                  )}
                 </div>
-                <div>
-                  <Label>Duration</Label>
-                  <input className={inp} placeholder="Jun 2022 – Present" value={exp.duration} onChange={(e) => updateExp(exp.id, "duration", e.target.value)} />
-                </div>
-              </div>
-              <div>
-                <Label>Role / Title</Label>
-                <input className={inp} placeholder="Software Engineer" value={exp.role} onChange={(e) => updateExp(exp.id, "role", e.target.value)} />
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <Label>Bullet Points (one per line)</Label>
-                  <AIButton
-                    label="✨ Enhance"
-                    loading={!!aiLoading[`exp-enhance-${exp.id}`]}
-                    onClick={() =>
-                      enhance(`exp-enhance-${exp.id}`, `Work Experience at ${exp.company}`, exp.bullets, (v) =>
-                        updateExp(exp.id, "bullets", v)
-                      )
-                    }
-                  />
-                </div>
-                <textarea
-                  className={ta}
-                  rows={3}
-                  placeholder="- Built REST APIs serving 10k+ users&#10;- Reduced load time by 40% via caching&#10;- Led team of 3 engineers..."
-                  value={exp.bullets}
-                  onChange={(e) => updateExp(exp.id, "bullets", e.target.value)}
-                />
+              ))}
+              <div className="flex items-center gap-2 pt-1">
+                <button onClick={() => update("skills", { descriptions: [...data.skills.descriptions, ""] })} className="flex items-center gap-1 text-xs text-red-400 font-bold"><Plus size={13} /> Add row</button>
+                <AIBtn label="Enhance All" loading={!!aiLoading["skills-e"]} onClick={() => enhance("skills-e", data.skills.descriptions.join(", "), `Skills for ${jobTitle || "Software Engineer"}`, (v) => update("skills", { descriptions: [v] }))} />
               </div>
             </div>
-          ))}
-          <button
-            onClick={addExp}
-            className="flex items-center gap-1.5 text-xs text-baymax-red hover:text-baymax-red-light transition-colors font-bold mt-1"
-          >
-            <Plus size={13} /> Add Position
-          </button>
-        </Accordion>
+          )}
+        </div>
 
-        {/* Education */}
-        <Accordion title="🎓 Education">
-          {data.education.map((edu, idx) => (
-            <div key={edu.id} className="space-y-2 pb-3 border-b border-border last:border-0">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-muted-foreground">Entry {idx + 1}</span>
-                {data.education.length > 1 && (
-                  <button onClick={() => removeEdu(edu.id)} className="text-red-400 hover:text-red-300 transition-colors">
-                    <Trash2 size={13} />
-                  </button>
-                )}
-              </div>
-              <div>
-                <Label>Institution</Label>
-                <input className={inp} placeholder="FAST-NUCES" value={edu.institution} onChange={(e) => updateEdu(edu.id, "institution", e.target.value)} />
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label>Degree</Label>
-                  <input className={inp} placeholder="BS Computer Science" value={edu.degree} onChange={(e) => updateEdu(edu.id, "degree", e.target.value)} />
+        {/* ── Projects Section ── */}
+        <div className="border-b border-[#1f1f1f]">
+          <SectionHeader icon={<Layers size={14} className="text-red-400" />} title="Projects" open={openSections.proj} toggle={() => toggleSection("proj")} />
+          {openSections.proj && (
+            <div className="p-4 space-y-4">
+              {data.projects.map((proj, idx) => (
+                <div key={proj.id} className="rounded-xl p-3 space-y-2.5" style={{ background: "#111111", border: "1px solid #2a2a2a" }}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-gray-500">Project {idx + 1}</span>
+                    {data.projects.length > 1 && <button onClick={() => removeProj(proj.id)} className="text-red-500"><Trash2 size={13} /></button>}
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><Label>Project Name</Label><input className={inp} placeholder="Baymax AI" value={proj.project} onChange={(e) => setProj(proj.id, "project", e.target.value)} /></div>
+                    <div><Label>Date / Duration</Label><input className={inp} placeholder="Jan – Mar 2025" value={proj.date} onChange={(e) => setProj(proj.id, "date", e.target.value)} /></div>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <Label>Bullet Points</Label>
+                      <AIBtn label="Enhance" loading={!!aiLoading[`proj-${proj.id}`]} onClick={() => enhance(`proj-${proj.id}`, proj.descriptions.filter(Boolean).join("\n"), `Project: ${proj.project}`, (v) => setProj(proj.id, "descriptions", v.split("\n").filter(Boolean)))} />
+                    </div>
+                    {proj.descriptions.map((d, i) => (
+                      <input key={i} className={`${inp} mb-1.5`} placeholder={`• What you built / impact`} value={d} onChange={(e) => setProjBullet(proj.id, i, e.target.value)} />
+                    ))}
+                    <button onClick={() => addProjBullet(proj.id)} className="text-xs text-red-400 hover:text-red-300 font-bold mt-0.5">+ Add bullet</button>
+                  </div>
                 </div>
-                <div>
-                  <Label>Graduation Year</Label>
-                  <input className={inp} placeholder="2024" value={edu.year} onChange={(e) => updateEdu(edu.id, "year", e.target.value)} />
-                </div>
-              </div>
-              <div>
-                <Label>GPA (optional)</Label>
-                <input className={inp} placeholder="3.8 / 4.0" value={edu.gpa} onChange={(e) => updateEdu(edu.id, "gpa", e.target.value)} />
-              </div>
+              ))}
+              <button onClick={addProj} className="flex items-center gap-1.5 text-xs text-red-400 hover:text-red-300 font-bold"><Plus size={13} /> Add Project</button>
             </div>
-          ))}
-          <button
-            onClick={addEdu}
-            className="flex items-center gap-1.5 text-xs text-baymax-red hover:text-baymax-red-light transition-colors font-bold mt-1"
-          >
-            <Plus size={13} /> Add Education
-          </button>
-        </Accordion>
-
-        {/* Skills */}
-        <Accordion title="⚡ Skills">
-          <div className="flex items-center justify-between mb-1">
-            <Label>Skills (comma-separated or by category)</Label>
-            <AIButton
-              label="✨ Enhance"
-              loading={!!aiLoading["skills-enhance"]}
-              onClick={() =>
-                enhance("skills-enhance", "Skills", data.skills, (v) => set("skills", v))
-              }
-            />
-          </div>
-          <textarea
-            className={ta}
-            rows={3}
-            placeholder="Languages: Python, JavaScript, TypeScript&#10;Frameworks: React, FastAPI, Node.js&#10;Tools: Docker, Git, AWS"
-            value={data.skills}
-            onChange={(e) => set("skills", e.target.value)}
-          />
-        </Accordion>
-
-        {/* Projects */}
-        <Accordion title="🚀 Projects">
-          {data.projects.map((proj, idx) => (
-            <div key={proj.id} className="space-y-2 pb-3 border-b border-border last:border-0">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-muted-foreground">Project {idx + 1}</span>
-                {data.projects.length > 1 && (
-                  <button onClick={() => removeProj(proj.id)} className="text-red-400 hover:text-red-300 transition-colors">
-                    <Trash2 size={13} />
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <Label>Project Name</Label>
-                  <input className={inp} placeholder="Baymax AI" value={proj.name} onChange={(e) => updateProj(proj.id, "name", e.target.value)} />
-                </div>
-                <div>
-                  <Label>Tech Stack</Label>
-                  <input className={inp} placeholder="React, Python, LLM" value={proj.tech} onChange={(e) => updateProj(proj.id, "tech", e.target.value)} />
-                </div>
-              </div>
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <Label>Description</Label>
-                  <AIButton
-                    label="✨ Enhance"
-                    loading={!!aiLoading[`proj-enhance-${proj.id}`]}
-                    onClick={() =>
-                      enhance(`proj-enhance-${proj.id}`, `Project: ${proj.name}`, proj.description, (v) =>
-                        updateProj(proj.id, "description", v)
-                      )
-                    }
-                  />
-                </div>
-                <textarea
-                  className={ta}
-                  rows={2}
-                  placeholder="Built a full-stack AI career assistant that..."
-                  value={proj.description}
-                  onChange={(e) => updateProj(proj.id, "description", e.target.value)}
-                />
-              </div>
-            </div>
-          ))}
-          <button
-            onClick={addProj}
-            className="flex items-center gap-1.5 text-xs text-baymax-red hover:text-baymax-red-light transition-colors font-bold mt-1"
-          >
-            <Plus size={13} /> Add Project
-          </button>
-        </Accordion>
+          )}
+        </div>
 
         {/* Download */}
-        <button
-          onClick={downloadPDF}
-          className="w-full bg-baymax-red text-foreground font-syne font-bold py-3 rounded-lg btn-red-glow transition-all flex items-center justify-center gap-2"
-        >
-          <Download size={16} /> Download as PDF
-        </button>
+        <div className="p-4">
+          <button
+            onClick={downloadPDF}
+            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-white text-sm"
+            style={{ background: "linear-gradient(135deg, #e53e3e, #c53030)", boxShadow: "0 4px 20px rgba(229,62,62,0.35)" }}
+          >
+            <Download size={15} /> Download PDF
+          </button>
+        </div>
       </div>
 
-      {/* ── Live Preview Panel ────────────────────────────────────────────── */}
-      <div className="bg-[#f0f0f0] overflow-hidden flex flex-col">
-        <div className="flex items-center justify-between px-4 py-2.5 bg-[#e0e0e0] border-b border-gray-300">
+      {/* ── Live Preview Panel ─────────────────────────────────────────── */}
+      <div className="flex flex-col overflow-hidden" style={{ background: "#f0f0f0" }}>
+        <div className="flex items-center justify-between px-4 py-2.5" style={{ background: "#e0e0e0", borderBottom: "1px solid #ccc" }}>
           <span className="text-xs font-bold text-gray-600 uppercase tracking-wider">Live Preview</span>
           <span className="text-xs text-gray-400">A4 · ATS-Friendly</span>
         </div>
-        <div className="flex-1 overflow-auto p-3">
+        <div className="flex-1 overflow-auto p-4">
           <div
-            className="bg-white shadow-lg mx-auto"
-            style={{
-              width: "100%",
-              maxWidth: "720px",
-              minHeight: "960px",
-              fontFamily: "Georgia, serif",
-            }}
-            dangerouslySetInnerHTML={{ __html: previewHTML.replace(/<!DOCTYPE html>.*?<body[^>]*>/s, "").replace(/<\/body>.*$/s, "") }}
+            className="bg-white shadow-xl mx-auto"
+            style={{ width: "100%", maxWidth: "694px", minHeight: "900px" }}
+            dangerouslySetInnerHTML={{ __html: previewBody }}
           />
         </div>
       </div>

@@ -8,8 +8,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── API Keys ──────────────────────────────────────────────────────────────────
-GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
-SERPER_API_KEY = os.getenv("SERPER_API_KEY", "")
+GROQ_API_KEY      = os.getenv("GROQ_API_KEY", "")
+SERPER_API_KEY    = os.getenv("SERPER_API_KEY", "")
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "fc-72b12ed462de43ccab20fc0e118129de")
+MEM0_API_KEY      = os.getenv("MEM0_API_KEY",      "m0-GmuOrwaLpvuXBjhwGOrb06CgIDKr2Hvv8RsYaQBl")
+
 
 # ── Groq Model Selection ──────────────────────────────────────────────────────
 # Primary model: llama-3.3-70b-versatile  (smarter, slightly slower)

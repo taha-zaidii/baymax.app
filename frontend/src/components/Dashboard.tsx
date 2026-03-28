@@ -1,35 +1,42 @@
 import { useState } from "react";
 import BaymaxMascot from "./BaymaxMascot";
 import ResumeAnalyzer from "./ResumeAnalyzer";
-import ResumeBuilder from "./ResumeBuilder";
+import ResumeBuilder, { resumeStateToText } from "./ResumeBuilder";
 import InterviewCoach from "./InterviewCoach";
 import JobScout from "./JobScout";
 import RoadmapPlanner from "./RoadmapPlanner";
 
 const tabs = [
   { icon: "📄", label: "Resume" },
+  { icon: "🏗️", label: "Builder" },
   { icon: "🎤", label: "Interview" },
   { icon: "🔍", label: "Job Scout" },
   { icon: "🗺️", label: "Roadmap" },
-  { icon: "🏗️", label: "Builder" },
 ];
 
 const Dashboard = () => {
   const [activeTab, setActiveTab] = useState(0);
-  // Shared context passed between tabs after resume analysis
-  const [sharedJobTitle, setSharedJobTitle] = useState("");
+
+  // Shared cross-agent context
+  const [sharedJobTitle, setSharedJobTitle]         = useState("");
   const [sharedResumeSummary, setSharedResumeSummary] = useState("");
 
-  const handleResumeComplete = (jobTitle: string, resumeSummary: string) => {
+  // Builder resume text — shared up so Analyzer can analyze it directly
+  const [builderResumeText, setBuilderResumeText] = useState("");
+
+  const handleAnalysisComplete = (jobTitle: string, summary: string) => {
     setSharedJobTitle(jobTitle);
-    setSharedResumeSummary(resumeSummary);
+    setSharedResumeSummary(summary);
   };
 
   return (
     <section id="dashboard" className="py-24">
       <div className="red-divider mb-24" />
       <div className="max-w-6xl mx-auto px-6">
-        <div className="rounded-[20px] border border-border p-6 md:p-8 dashboard-glow" style={{ background: "#0f0f0f" }}>
+        <div
+          className="rounded-[20px] border border-border p-6 md:p-8 dashboard-glow"
+          style={{ background: "#0f0f0f" }}
+        >
           {/* Welcome */}
           <div className="flex items-center gap-4 mb-8">
             <BaymaxMascot size={80} showWave={true} showTooltip={false} />
@@ -60,35 +67,39 @@ const Dashboard = () => {
             ))}
           </div>
 
-          {/* Tab content */}
+          {/* Content */}
           <div key={activeTab} style={{ animation: "staggerFadeIn 0.3s ease-out" }}>
             {activeTab === 0 && (
               <ResumeAnalyzer
-                onSwitchTab={(tab) => setActiveTab(tab)}
-                onAnalysisComplete={handleResumeComplete}
+                onSwitchTab={setActiveTab}
+                onAnalysisComplete={handleAnalysisComplete}
+                builderResumeText={builderResumeText}
               />
             )}
             {activeTab === 1 && (
+              <ResumeBuilder
+                jobTitle={sharedJobTitle}
+                onResumeTextChange={setBuilderResumeText}
+              />
+            )}
+            {activeTab === 2 && (
               <InterviewCoach
                 onSwitchTab={setActiveTab}
                 jobTitle={sharedJobTitle}
                 resumeSummary={sharedResumeSummary}
               />
             )}
-            {activeTab === 2 && (
+            {activeTab === 3 && (
               <JobScout
                 jobTitle={sharedJobTitle}
                 skillsSummary={sharedResumeSummary}
               />
             )}
-            {activeTab === 3 && (
+            {activeTab === 4 && (
               <RoadmapPlanner
                 jobTitle={sharedJobTitle}
                 skillsGap={sharedResumeSummary}
               />
-            )}
-            {activeTab === 4 && (
-              <ResumeBuilder jobTitle={sharedJobTitle} />
             )}
           </div>
         </div>

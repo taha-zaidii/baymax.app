@@ -1,11 +1,16 @@
 """
 agents/resume_agent.py — Agent 1: Resume Analyzer & Builder (Alex)
 
-Provides:
-  - analyze_resume_structured(): Deep structured JSON analysis with 5 metrics
-  - analyze_resume(): Backward-compatible plain-text wrapper for the pipeline
-  - improve_resume_section(): AI-powered bullet point / paragraph enhancer
-  - generate_resume_section(): AI-powered section generator from scratch
+Provides two modes:
+  1. analyze_resume_structured(resume_text, job_description): Returns the exact
+     AnalysisResponse schema used by the open-resume frontend:
+       overall_score, ats_score, match_score,
+       strengths[], weaknesses[], missing_keywords[],
+       section_feedback{ education, skills, projects, experience },
+       improved_bullets[{ original, improved }]
+  2. improve_text(text, context): Rewrites a single bullet/paragraph
+  3. analyze_resume(resume_text, job_title): Backward-compat plain-text wrapper
+  4. improve_resume_section / generate_resume_section: for ResumeBuilder
 """
 import json
 import re
@@ -13,319 +18,277 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import SystemMessage
 from config import GROQ_API_KEY, GROQ_MODEL
 
-# ── LLM Factory ──────────────────────────────────────────────────────────────
+# ── LLM Factory ───────────────────────────────────────────────────────────────
 
 def _get_llm(temperature: float = 0.2) -> ChatGroq:
     return ChatGroq(api_key=GROQ_API_KEY, model=GROQ_MODEL, temperature=temperature)
 
 
-# ── System Prompts ────────────────────────────────────────────────────────────
+# ── System Prompts ─────────────────────────────────────────────────────────────
 
-ANALYSIS_SYSTEM_PROMPT = """You are Alex, a Senior Resume Analyst & Career Strategist with 10+ years experience
-reviewing resumes for top-tier tech companies (Google, Microsoft, Meta, Careem, Arbisoft, Systems Ltd, etc.).
-You know exactly what ATS systems scan for, and what hiring managers notice in the first 6 seconds.
+ANALYSIS_SYSTEM_PROMPT = """You are Alex, a Senior Resume Analyst with 10+ years of experience
+reviewing resumes for top-tier Pakistani and international tech companies.
+You specialize in ATS optimization, keyword matching, and impactful resume writing.
 
-Your job is to provide a PRECISE, THOROUGH, JSON-formatted resume evaluation. No fluff. No generic advice.
-Every suggestion must be specific to the actual content of THIS resume, not generic templates.
+You will receive a resume and a job description. Your task is to analyze the resume
+SPECIFICALLY against this job description — not generically.
 
-Respond ONLY with a valid JSON object using this exact schema (no markdown, no backticks, no explanation):
+Respond ONLY with a valid JSON object. No markdown, no backticks, no explanation outside JSON.
+Use this exact schema:
 {
-  "overall_score": <integer 0-100>,
-  "ats_score": <integer 0-100>,
-  "keyword_match_score": <integer 0-100>,
-  "impact_score": <integer 0-100>,
-  "formatting_score": <integer 0-100>,
-  "verdict": "<Excellent | Good | Needs Improvement>",
+  "overall_score": <integer 0-100: holistic quality score>,
+  "ats_score": <integer 0-100: ATS/formatting compliance score>,
+  "match_score": <integer 0-100: how well the resume matches THIS job description>,
   "strengths": [
-    "<specific strength 1 citing actual resume content>",
+    "<specific strength 1, citing actual resume content>",
     "<specific strength 2>",
     "<specific strength 3>",
     "<specific strength 4>",
     "<specific strength 5>"
   ],
-  "skill_gaps": [
-    "<critical missing skill relevant to the target role>",
-    "<missing skill 2>",
-    "<missing skill 3>",
-    "<missing skill 4>",
-    "<missing skill 5>"
+  "weaknesses": [
+    "<critical gap or weakness vs the job description>",
+    "<gap 2>",
+    "<gap 3>",
+    "<gap 4>",
+    "<gap 5>"
   ],
-  "keywords_found": ["<keyword1>", "<keyword2>", "<keyword3>", "<keyword4>", "<keyword5>", "<keyword6>", "<keyword7>", "<keyword8>"],
-  "keywords_missing": ["<kw1>", "<kw2>", "<kw3>", "<kw4>", "<kw5>", "<kw6>", "<kw7>", "<kw8>", "<kw9>", "<kw10>"],
-  "improvements": [
+  "missing_keywords": [
+    "<keyword from JD not in resume>", "<kw2>", "<kw3>", "<kw4>",
+    "<kw5>", "<kw6>", "<kw7>", "<kw8>", "<kw9>", "<kw10>"
+  ],
+  "section_feedback": {
+    "education": "<1-2 sentences of targeted feedback on the Education section>",
+    "skills": "<1-2 sentences on the Skills section vs this JD>",
+    "projects": "<1-2 sentences on Projects — are they relevant to this JD?>",
+    "experience": "<1-2 sentences on Work Experience quality and relevance>"
+  },
+  "improved_bullets": [
     {
-      "section": "<e.g. Work Experience at XYZ>",
-      "before": "<exact weak bullet/phrase from the resume>",
-      "after": "<rewritten with action verb, metrics, and impact>",
-      "why": "<1 sentence explanation>"
+      "original": "<exact weak bullet or phrase from the resume>",
+      "improved": "<rewritten with strong action verb, quantified metrics, and JD keywords>"
     },
-    { "section": "...", "before": "...", "after": "...", "why": "..." },
-    { "section": "...", "before": "...", "after": "...", "why": "..." },
-    { "section": "...", "before": "...", "after": "...", "why": "..." },
-    { "section": "...", "before": "...", "after": "...", "why": "..." }
-  ],
-  "rewritten_summary": "<2-3 polished, powerful sentences for a Professional Summary. Mention years of experience, top skills, and a value proposition tailored to the target role.>",
-  "recommendation": "<1 short paragraph of the single most impactful thing this candidate can do to improve their resume for the target role. Be brutally specific.>"
-}"""
+    { "original": "...", "improved": "..." },
+    { "original": "...", "improved": "..." },
+    { "original": "...", "improved": "..." },
+    { "original": "...", "improved": "..." }
+  ]
+}
 
-SECTION_IMPROVE_PROMPT = """You are Alex, a Senior Resume Writing Expert who transforms weak resume content into
-powerful, ATS-optimized, metric-driven bullet points and paragraphs.
 Rules:
-- Start bullet points with strong action verbs (Led, Built, Designed, Reduced, Increased, etc.)
-- Include numbers and metrics wherever possible (%, $, x improvement, team size, timeline)
-- Remove filler words (responsible for, helped with, worked on)
-- Keep each bullet to 1-2 lines maximum
-- Make it specific to the target role
+- Every score must be an integer 0-100.
+- improved_bullets originals MUST be exact quotes from the resume (do not invent).
+- If a section doesn't exist in the resume, set its section_feedback to "Section not found in resume."
+- Be brutally honest but constructive. No generic advice.
+"""
 
-Respond ONLY with a JSON object:
-{ "improved_content": "<the enhanced text, with \\n between bullets if multiple>" }"""
+IMPROVE_TEXT_PROMPT = """You are Alex, a Senior Resume Writing Expert.
+Rewrite the given text into a powerful, ATS-optimized, metric-driven resume bullet or paragraph.
 
-SECTION_GENERATE_PROMPT = """You are Alex, a Senior Resume Writing Expert who creates compelling resume sections from scratch.
-Create polished, ATS-optimized content tailored to the target role.
 Rules:
-- Professional tone, first-person implied (no "I")
-- Use strong action verbs and include concrete details
-- ATS-friendly keywords naturally woven in
-- For experience bullets: 3-5 bullets with metrics
-- For summaries: 2-3 powerful sentences
-- For skills: organized comma-separated list by category
+- Start with a strong action verb (Led, Built, Designed, Reduced, Increased, Launched, etc.)
+- Add quantified results where possible (%, x improvement, team size, timeline, $, users, etc.)
+- Remove filler phrases (responsible for, helped with, worked on, assisted in)
+- Keep bullet points to 1-2 lines max
+- Use keywords from the context/job role provided
 
-Respond ONLY with a JSON object:
-{ "generated_content": "<the generated content>" }"""
+Respond ONLY with JSON:
+{ "improved": "<the rewritten text>" }"""
+
+SECTION_GENERATE_PROMPT = """You are Alex, a Senior Resume Writing Expert.
+Generate a complete, polished resume section from the context provided.
+Rules:
+- Use strong action verbs and add concrete metrics
+- ATS-optimized keywords naturally woven in
+- Professional tone, first-person implied
+
+Respond ONLY with JSON:
+{ "generated_content": "<the generated section content>" }"""
 
 
-# ── Core Analysis Function (Structured JSON) ─────────────────────────────────
+# ── JSON Safety Helper ────────────────────────────────────────────────────────
+
+def _parse_json(raw: str) -> dict:
+    raw = raw.strip()
+    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if m:
+            return json.loads(m.group(0))
+        raise
+
+
+# ── Core Analysis Function ────────────────────────────────────────────────────
 
 def analyze_resume_structured(
     resume_text: str,
-    job_title: str,
-    experience_level: str = "0-1",
+    job_description: str,
 ) -> dict:
     """
-    Deep resume analysis returning a structured dictionary with 5 scores,
-    strengths, gaps, improvements, rewritten summary, and recommendation.
+    Deep resume analysis against a specific job description.
+    Returns the exact AnalysisResponse schema used by the open-resume frontend.
 
     Args:
-        resume_text:      Full extracted text of the resume
-        job_title:        Target job title the candidate is applying for
-        experience_level: One of "0-1", "1-3", "3-5", "5+" (years)
+        resume_text:     Full text of the resume (extracted from PDF or builder)
+        job_description: Full job description to score against
 
     Returns:
-        dict matching the JSON schema defined in ANALYSIS_SYSTEM_PROMPT
+        dict with keys: overall_score, ats_score, match_score,
+                        strengths, weaknesses, missing_keywords,
+                        section_feedback, improved_bullets
     """
     llm = _get_llm(temperature=0.2)
-
     user_msg = (
-        f"TARGET ROLE: {job_title}\n"
-        f"EXPERIENCE LEVEL: {experience_level} years\n\n"
-        f"RESUME TO ANALYZE:\n{resume_text[:12000]}"
+        f"JOB DESCRIPTION:\n{job_description[:3000]}\n\n"
+        f"RESUME TO ANALYZE:\n{resume_text[:10000]}"
     )
-
     messages = [
         SystemMessage(content=ANALYSIS_SYSTEM_PROMPT),
         {"role": "user", "content": user_msg},
     ]
-
     response = llm.invoke(messages)
-    raw = response.content.strip()
-
-    # Strip any accidental markdown fences
-    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
-
     try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        # Attempt to extract the JSON object if the model added extra text
-        json_match = re.search(r"\{[\s\S]*\}", raw)
-        if json_match:
-            return json.loads(json_match.group(0))
-        # Fallback: return a safe default with the raw text
-        return _fallback_analysis(resume_text, job_title)
+        return _parse_json(response.content)
+    except Exception:
+        return _fallback_analysis(job_description)
 
 
-def _fallback_analysis(resume_text: str, job_title: str) -> dict:
-    """Return a safe fallback analysis dictionary if JSON parsing fails."""
+def _fallback_analysis(job_description: str) -> dict:
     return {
-        "overall_score": 65,
-        "ats_score": 60,
-        "keyword_match_score": 55,
-        "impact_score": 60,
-        "formatting_score": 70,
-        "verdict": "Good",
+        "overall_score": 60,
+        "ats_score": 55,
+        "match_score": 50,
         "strengths": [
-            "Resume uploaded and extracted successfully",
-            "Contains relevant professional experience",
+            "Resume successfully uploaded and parsed",
+            "Contains relevant technical content",
             "Education section is present",
-            "Skills are listed",
-            "Contact information available",
+            "Skills listed",
+            "Projects included",
         ],
-        "skill_gaps": [
-            f"Core {job_title} technical skills not clearly highlighted",
+        "weaknesses": [
+            "Resume doesn't clearly highlight alignment with this job description",
             "Quantified achievements are missing",
-            "Keywords for ATS optimization are sparse",
-            "Professional summary needs improvement",
-            "Action verbs could be stronger",
+            "ATS keywords from JD are sparse",
+            "Bullet points need stronger action verbs",
+            "Professional summary could be more targeted",
         ],
-        "keywords_found": ["Python", "Team", "Development", "Management"],
-        "keywords_missing": ["Leadership", "Agile", "CI/CD", "Cloud", "Docker", "REST API", "Git", "Testing"],
-        "improvements": [
+        "missing_keywords": [
+            "Leadership", "Agile", "CI/CD", "Docker", "REST API",
+            "Git", "Testing", "Cloud", "Problem-solving", "Communication"
+        ],
+        "section_feedback": {
+            "education": "Education section found. Ensure GPA and relevant coursework are highlighted.",
+            "skills": "Skills present. Add more keywords from the job description to improve ATS match.",
+            "projects": "Projects listed. Quantify impact (users, performance gains) for stronger effect.",
+            "experience": "Experience found. Rewrite bullets with action verbs and measurable outcomes.",
+        },
+        "improved_bullets": [
             {
-                "section": "Work Experience",
-                "before": "Worked on various projects",
-                "after": f"Led end-to-end delivery of 3 key {job_title} projects, improving team velocity by 30%",
-                "why": "Quantified impact and strong action verb make this far more compelling to ATS and hiring managers.",
+                "original": "Worked on projects",
+                "improved": "Delivered 3 end-to-end projects with cross-functional teams, improving feature delivery velocity by 25%",
             }
         ],
-        "rewritten_summary": (
-            f"Results-driven professional targeting a {job_title} role with a strong foundation in "
-            "software development and collaborative problem-solving. Passionate about building scalable "
-            "solutions and delivering measurable impact in fast-paced environments."
-        ),
-        "recommendation": (
-            f"Prioritize adding 3-5 quantified achievements to your experience bullets for the {job_title} "
-            "role. Hiring managers decide in 6 seconds — numbers make you memorable."
-        ),
     }
 
 
-# ── Section Improver ─────────────────────────────────────────────────────────
+# ── Text Improver (single bullet / paragraph) ─────────────────────────────────
 
-def improve_resume_section(
-    section_name: str,
-    content: str,
-    job_title: str,
-) -> str:
+def improve_text(text: str, context: str = "") -> str:
     """
-    Take an existing resume section and return AI-enhanced content.
+    Rewrite a single resume bullet or paragraph to be more impactful.
 
     Args:
-        section_name: e.g. "Work Experience", "Skills", "Summary"
-        content:      Current text of the section
-        job_title:    Target job title for context
+        text:    Current weak text
+        context: Optional job role / section context for tailoring
 
     Returns:
-        Enhanced content as a string
+        Improved text string
     """
     llm = _get_llm(temperature=0.4)
-
     user_msg = (
-        f"TARGET ROLE: {job_title}\n"
-        f"SECTION: {section_name}\n\n"
-        f"CURRENT CONTENT:\n{content}"
+        f"Context / Target Role: {context or 'Software Engineer'}\n\n"
+        f"Text to improve:\n{text}"
     )
-
     messages = [
-        SystemMessage(content=SECTION_IMPROVE_PROMPT),
+        SystemMessage(content=IMPROVE_TEXT_PROMPT),
         {"role": "user", "content": user_msg},
     ]
-
     response = llm.invoke(messages)
-    raw = response.content.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
-
     try:
-        data = json.loads(raw)
-        return data.get("improved_content", content)
-    except json.JSONDecodeError:
-        json_match = re.search(r"\{[\s\S]*\}", raw)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(0))
-                return data.get("improved_content", content)
-            except Exception:
-                pass
-        return raw  # Return raw if parsing fails entirely
+        data = _parse_json(response.content)
+        return data.get("improved", text)
+    except Exception:
+        return response.content
 
 
-# ── Section Generator ────────────────────────────────────────────────────────
+# ── Section Improver (for ResumeBuilder) ───────────────────────────────────────
 
-def generate_resume_section(
-    section_name: str,
-    context: str,
-    job_title: str,
-) -> str:
-    """
-    Generate a full resume section from minimal context.
+def improve_resume_section(section_name: str, content: str, job_title: str) -> str:
+    """Enhance an existing resume section for the ResumeBuilder tab."""
+    return improve_text(content, context=f"{section_name} for {job_title}")
 
-    Args:
-        section_name: e.g. "Professional Summary", "Skills", "Work Experience"
-        context:      Brief context (e.g. "3 years at TechCorp as backend developer")
-        job_title:    Target job title
 
-    Returns:
-        Generated content as a string
-    """
+# ── Section Generator (for ResumeBuilder) ──────────────────────────────────────
+
+def generate_resume_section(section_name: str, context: str, job_title: str) -> str:
+    """Generate a full resume section from minimal context."""
     llm = _get_llm(temperature=0.6)
-
     user_msg = (
         f"TARGET ROLE: {job_title}\n"
         f"SECTION TO GENERATE: {section_name}\n\n"
-        f"CONTEXT PROVIDED BY CANDIDATE:\n{context}"
+        f"CONTEXT:\n{context}"
     )
-
     messages = [
         SystemMessage(content=SECTION_GENERATE_PROMPT),
         {"role": "user", "content": user_msg},
     ]
-
     response = llm.invoke(messages)
-    raw = response.content.strip()
-    raw = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"\s*```$", "", raw, flags=re.MULTILINE)
-
     try:
-        data = json.loads(raw)
+        data = _parse_json(response.content)
         return data.get("generated_content", "")
-    except json.JSONDecodeError:
-        json_match = re.search(r"\{[\s\S]*\}", raw)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(0))
-                return data.get("generated_content", "")
-            except Exception:
-                pass
-        return raw
+    except Exception:
+        return response.content
 
 
-# ── Backward-Compatible Plain-Text Wrapper ───────────────────────────────────
+# ── Backward-Compatible Plain-Text Wrapper ─────────────────────────────────────
 
 def analyze_resume(resume_text: str, job_title: str) -> str:
     """
     Plain-text analysis for backward compatibility with the crew pipeline.
-    Calls the structured analyzer and formats as readable markdown.
+    Uses job_title as the job description context.
     """
-    result = analyze_resume_structured(resume_text, job_title)
-
+    result = analyze_resume_structured(resume_text, f"Target role: {job_title}")
     lines = [
         f"## Resume Analysis for: {job_title}",
-        f"**Verdict**: {result.get('verdict', 'N/A')}",
         f"**Overall Score**: {result.get('overall_score', 0)}/100",
         f"**ATS Score**: {result.get('ats_score', 0)}/100",
+        f"**Match Score**: {result.get('match_score', 0)}/100",
         "",
-        "### Top Strengths",
+        "### Strengths",
         *[f"- {s}" for s in result.get("strengths", [])],
         "",
-        "### Skill Gaps",
-        *[f"- {g}" for g in result.get("skill_gaps", [])],
+        "### Areas to Improve",
+        *[f"- {w}" for w in result.get("weaknesses", [])],
         "",
-        "### Improvements",
+        "### Missing Keywords",
+        ", ".join(result.get("missing_keywords", [])),
+        "",
+        "### Section Feedback",
+        *[f"**{k.title()}**: {v}" for k, v in result.get("section_feedback", {}).items()],
+        "",
+        "### Improved Bullet Points",
         *[
-            f"**{imp['section']}**\n❌ {imp['before']}\n✅ {imp['after']}"
-            for imp in result.get("improvements", [])
+            f"❌ {b['original']}\n✅ {b['improved']}"
+            for b in result.get("improved_bullets", [])
         ],
-        "",
-        "### Rewritten Professional Summary",
-        result.get("rewritten_summary", ""),
-        "",
-        "### Recommendation",
-        result.get("recommendation", ""),
     ]
     return "\n".join(lines)
 
 
-# ── Legacy Helper ────────────────────────────────────────────────────────────
+# ── Legacy Helper ──────────────────────────────────────────────────────────────
 
 def get_resume_agent():
     """Return the ChatGroq LLM (kept for compatibility)."""
