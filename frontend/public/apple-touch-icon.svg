@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180">
+  <!-- Background -->
+  <rect width="180" height="180" rx="40" fill="#0a0a0a"/>
+
+  <!-- Outer glow ring -->
+  <circle cx="90" cy="78" r="55" fill="none" stroke="#e53e3e" stroke-width="2" opacity="0.3"/>
+
+  <!-- Robot head -->
+  <ellipse cx="90" cy="75" rx="40" ry="37" fill="#141414" stroke="#e53e3e" stroke-width="2.5"/>
+
+  <!-- Eyes -->
+  <circle cx="76" cy="73" r="10" fill="#e53e3e" opacity="0.9"/>
+  <circle cx="104" cy="73" r="10" fill="#e53e3e" opacity="0.9"/>
+
+  <!-- Eye shine -->
+  <circle cx="80" cy="68" r="3" fill="white" opacity="0.8"/>
+  <circle cx="108" cy="68" r="3" fill="white" opacity="0.8"/>
+
+  <!-- Smile -->
+  <path d="M73 86 Q90 97 107 86" stroke="#e53e3e" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.85"/>
+
+  <!-- Antenna -->
+  <line x1="90" y1="38" x2="90" y2="24" stroke="#e53e3e" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="90" cy="21" r="5" fill="#e53e3e"/>
+
+  <!-- "AI" label -->
+  <text x="90" y="158" font-family="'Arial', sans-serif" font-size="26" font-weight="bold"
+        fill="#e53e3e" text-anchor="middle" letter-spacing="6">AI</text>
+</svg>

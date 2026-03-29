@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <!-- Dark background -->
+  <rect width="1200" height="630" fill="#0a0a0a"/>
+
+  <!-- Subtle grid -->
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#1a1a1a" stroke-width="1"/>
+    </pattern>
+    <radialGradient id="glow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#e53e3e" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#0a0a0a" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <ellipse cx="600" cy="315" rx="500" ry="300" fill="url(#glow)"/>
+
+  <!-- Robot icon -->
+  <ellipse cx="200" cy="280" rx="100" ry="93" fill="#141414" stroke="#e53e3e" stroke-width="3"/>
+  <circle cx="175" cy="275" r="22" fill="#e53e3e" opacity="0.9"/>
+  <circle cx="225" cy="275" r="22" fill="#e53e3e" opacity="0.9"/>
+  <circle cx="183" cy="266" r="7" fill="white" opacity="0.8"/>
+  <circle cx="233" cy="266" r="7" fill="white" opacity="0.8"/>
+  <path d="M168 300 Q200 320 232 300" stroke="#e53e3e" stroke-width="4" fill="none" stroke-linecap="round" opacity="0.85"/>
+  <line x1="200" y1="187" x2="200" y2="168" stroke="#e53e3e" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="200" cy="162" r="10" fill="#e53e3e"/>
+
+  <!-- Title -->
+  <text x="340" y="270" font-family="'Arial Black', Arial, sans-serif" font-size="80" font-weight="900"
+        fill="white">Baymax</text>
+  <text x="340" y="350" font-family="'Arial Black', Arial, sans-serif" font-size="80" font-weight="900"
+        fill="#e53e3e">.app</text>
+
+  <!-- Tagline -->
+  <text x="340" y="415" font-family="Arial, sans-serif" font-size="28" fill="#888888">
+    AI Career Coach for Pakistan's Tech Talent
+  </text>
+
+  <!-- Tags -->
+  <rect x="340" y="450" width="130" height="38" rx="19" fill="#1a1a1a" stroke="#e53e3e" stroke-width="1"/>
+  <text x="405" y="474" font-family="Arial, sans-serif" font-size="16" fill="#e53e3e" text-anchor="middle">Resume AI</text>
+
+  <rect x="485" y="450" width="155" height="38" rx="19" fill="#1a1a1a" stroke="#7c3aed" stroke-width="1"/>
+  <text x="562" y="474" font-family="Arial, sans-serif" font-size="16" fill="#a78bfa" text-anchor="middle">Mock Interview</text>
+
+  <rect x="655" y="450" width="120" height="38" rx="19" fill="#1a1a1a" stroke="#059669" stroke-width="1"/>
+  <text x="715" y="474" font-family="Arial, sans-serif" font-size="16" fill="#34d399" text-anchor="middle">Job Scout</text>
+
+  <rect x="790" y="450" width="140" height="38" rx="19" fill="#1a1a1a" stroke="#d97706" stroke-width="1"/>
+  <text x="860" y="474" font-family="Arial, sans-serif" font-size="16" fill="#fbbf24" text-anchor="middle">Roadmap AI</text>
+
+  <!-- Powered by Groq -->
+  <text x="600" y="580" font-family="Arial, sans-serif" font-size="18" fill="#444444" text-anchor="middle">
+    Powered by Groq · Firecrawl · Mem0
+  </text>
+</svg>
