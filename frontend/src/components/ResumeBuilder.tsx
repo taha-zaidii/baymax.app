@@ -68,7 +68,7 @@ interface ResumeState {
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-const API_BASE = "";  // relative — Vite proxy handles it
+import { API_BASE_URL as API_BASE } from "@/lib/api";
 
 
 async function improveSection(text: string, context = ""): Promise<string> {

@@ -42,7 +42,7 @@ interface AnalysisResult {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-const API_BASE = "";  // relative — Vite proxy handles it
+import { API_BASE_URL as API_BASE } from "@/lib/api";
 
 
 async function analyzeResumeJSON(resumeText: string, jobDescription: string): Promise<AnalysisResult> {
