@@ -175,7 +175,7 @@ export function useUserSession() {
       // Build skills arrays from analysis
       const skillsGap = result.missing_keywords ?? [];
       // Derive current skills from strengths (rough keyword extraction)
-      const currentSkills = result.strengths
+      const currentSkills = (result.strengths ?? [])
         .flatMap((s) => s.match(/\b[A-Z][a-zA-Z+#]+\b/g) ?? [])
         .filter((v, i, a) => a.indexOf(v) === i)
         .slice(0, 15);

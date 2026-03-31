@@ -197,10 +197,11 @@ const ResumeAnalyzer = ({ onSwitchTab, onAnalysisComplete, builderResumeText, us
       } else {
         throw new Error("No resume source selected");
       }
-      setResult(normalizeResult(data));
-      // Pass full structured result to Dashboard → useUserSession
+      const safe = normalizeResult(data);
+      setResult(safe);
+      // Pass NORMALIZED result to Dashboard — raw data can have null fields that crash parent
       const resumeText = (useCurrentResume && builderResumeText) ? builderResumeText : "";
-      onAnalysisComplete?.(data, jobDescription, resumeText);
+      onAnalysisComplete?.(safe, jobDescription, resumeText);
 
       // Persist to backend Mem0 (fire-and-forget)
       try {

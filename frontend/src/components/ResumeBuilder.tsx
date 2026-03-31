@@ -303,12 +303,31 @@ interface Props {
   onProceedToAnalysis?: () => void;
 }
 
+// Job title keywords (adapted from open-resume's list)
+const JOB_TITLE_WORDS = new Set([
+  "accountant","administrator","advisor","agent","analyst","apprentice","architect",
+  "assistant","associate","auditor","bartender","biologist","bookkeeper","buyer",
+  "carpenter","cashier","ceo","clerk","co-op","co-founder","consultant","coordinator",
+  "cto","developer","designer","director","driver","editor","electrician","engineer",
+  "extern","founder","freelancer","head","intern","janitor","journalist","lead",
+  "manager","mechanic","member","nurse","officer","operator","photographer","president",
+  "producer","recruiter","representative","researcher","scientist","specialist",
+  "supervisor","teacher","technician","trader","trainee","treasurer","tutor",
+  "vice","vp","volunteer","webmaster","worker","developer","programmer","devops",
+]);
+
+const hasJobTitleWord = (line: string) =>
+  line.toLowerCase().split(/\W+/).some((w) => JOB_TITLE_WORDS.has(w));
+
 /**
  * Parse raw resume text into a ResumeState.
  * Handles most common resume formats used in Pakistan and globally.
+ * Inspired by open-resume's feature-scoring approach.
  */
 function textToResumeState(text: string): { state: ResumeState; isRaw: boolean } {
-  const allLines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  // Preserve blank lines as subsection separators
+  const rawLines = text.split("\n").map((l) => l.trim());
+  const allLines = rawLines.filter(Boolean);
 
   const state: ResumeState = {
     profile: { name: "", email: "", phone: "", location: "", url: "", summary: "" },
@@ -318,7 +337,7 @@ function textToResumeState(text: string): { state: ResumeState; isRaw: boolean }
     skills: { descriptions: [] },
   };
 
-  // ── 1. Extract contact info from entire text ──────────────────────────────
+  // ── 1. Contact info ───────────────────────────────────────────────────────
   const emailMatch = text.match(/[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}/);
   if (emailMatch) state.profile.email = emailMatch[0];
 
@@ -328,31 +347,48 @@ function textToResumeState(text: string): { state: ResumeState; isRaw: boolean }
   if (phoneMatch) state.profile.phone = phoneMatch[0];
 
   const urlMatch = text.match(
-    /https?:\/\/[^\s,)]+|linkedin\.com\/in\/[^\s,)]+|github\.com\/[^\s,)]+/
+    /https?:\/\/[^\s,)\]]+|linkedin\.com\/in\/[^\s,)\]]+|github\.com\/[^\s,)\]]+/
   );
-  if (urlMatch) state.profile.url = urlMatch[0].replace(/[.,;]$/, "");
+  if (urlMatch) state.profile.url = urlMatch[0].replace(/[.,;)\]]+$/, "");
 
   // Name = first short line that isn't contact info
   for (const line of allLines.slice(0, 8)) {
-    if (/[@|linkedin|github|http|\+92|\+1|\d{6,}|@]/i.test(line)) continue;
-    if (line.length < 3 || line.length > 65) continue;
-    const wordCount = line.trim().split(/\s+/).length;
-    if (wordCount >= 1 && wordCount <= 6) { state.profile.name = line; break; }
+    if (/[@]|linkedin|github|https?:\/\//i.test(line)) continue;
+    if (/(\+92|0092|\+1|00[1-9])/.test(line)) continue;
+    if (/\d{6,}/.test(line)) continue;            // phone numbers
+    if (line.length < 2 || line.length > 70) continue;
+    const wc = line.trim().split(/\s+/).length;
+    if (wc >= 1 && wc <= 6) { state.profile.name = line; break; }
   }
 
-  // ── 2. Split text into named sections ─────────────────────────────────────
-  const SECTION_RE = /^(SUMMARY|OBJECTIVE|PROFESSIONAL\s+SUMMARY|PROFILE|ABOUT|EXPERIENCE|WORK\s+EXPERIENCE|PROFESSIONAL\s+EXPERIENCE|EMPLOYMENT|EDUCATION|ACADEMIC|SKILLS|TECHNICAL\s+SKILLS|PROJECTS|PERSONAL\s+PROJECTS|CERTIFICATIONS?|COURSES?|AWARDS?|PUBLICATIONS?|LANGUAGES?|INTERESTS?|REFERENCES?)/i;
+  // ── 2. Patterns ───────────────────────────────────────────────────────────
+  const DATE_RE      = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z']*[\s.,]+\d{2,4}|\b\d{4}\s*[-–—to]+\s*(\d{2,4}|present|current|now)/i;
+  const YEAR_RE      = /\b(20|19)\d{2}\b/;
+  const BULLET_RE    = /^[•\-*\u2013\u2022\u25CF➤➢▶►→◆■]\s+|^\d+[.)]\s+\S/;
+  const PIPE_RE      = /\s*\|\s*/;
+
+  const hasDate = (s: string) => DATE_RE.test(s) || YEAR_RE.test(s);
+  const isBullet = (s: string) => BULLET_RE.test(s);
+  const cleanBullet = (s: string) => s.replace(/^[•\-*\u2013\u2022\u25CF➤➢▶►→◆■]\s*/, "")
+                                      .replace(/^\d+[.)]\s+/, "").trim();
+
+  // ── 3. Section split (preserve blank lines between subsections) ───────────
+  const SECTION_HDR = /^(summary|objective|profile|about|experience|work|employment|education|skills|technical|projects|certifications?|courses?|awards?|languages?|interests?|references?)/i;
 
   const sections: Record<string, string[]> = { intro: [] };
   let curSec = "intro";
 
-  for (const line of allLines) {
-    if (SECTION_RE.test(line) && line.length < 55) {
-      // Normalise key
+  for (const line of rawLines) {
+    if (line === "") {
+      // Blank lines preserved as separator inside section
+      if (sections[curSec]?.length) sections[curSec].push("");
+      continue;
+    }
+    if (SECTION_HDR.test(line) && line.length < 60) {
+      // Normalize key: "Work Experience" → "experience", "Technical Skills" → "skills"
       const key = line.toLowerCase()
-        .replace(/professional\s+|technical\s+|personal\s+|academic\s+|work\s+/g, "")
-        .replace(/\s+/g, " ").trim()
-        .split(" ")[0];
+        .replace(/work\s+|professional\s+|technical\s+|personal\s+|academic\s+/g, "")
+        .replace(/[^a-z\s]/g, "").trim().split(/\s+/)[0];
       curSec = key;
       sections[curSec] = sections[curSec] ?? [];
     } else {
@@ -361,95 +397,133 @@ function textToResumeState(text: string): { state: ResumeState; isRaw: boolean }
     }
   }
 
-  // ── 3. Summary ────────────────────────────────────────────────────────────
-  const summaryLines =
-    sections["summary"] ?? sections["objective"] ?? sections["profile"] ?? sections["about"] ?? [];
-  if (summaryLines.length) state.profile.summary = summaryLines.join(" ").slice(0, 700);
-
-  // ── 4. Skills ─────────────────────────────────────────────────────────────
-  const skillLines = sections["skills"] ?? sections["certifications"] ?? [];
-  if (skillLines.length) {
-    const raw = skillLines.join(" | ");
-    const items = raw.split(/[,|•·\n\/]/).map((s) => s.replace(/^[\s\-*•]+/, "").trim()).filter((s) => s.length > 1 && s.length < 90);
-    state.skills.descriptions = items.slice(0, 12);
+  // ── 4. Summary ────────────────────────────────────────────────────────────
+  const summaryLines = sections["summary"] ?? sections["objective"] ?? sections["profile"] ?? sections["about"] ?? [];
+  if (summaryLines.length) {
+    state.profile.summary = summaryLines.filter(Boolean).join(" ").slice(0, 700);
   }
 
-  // ── 5. Work Experience ────────────────────────────────────────────────────
-  const DATE_IN_LINE = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s.]+\d{4}|\b\d{4}\s*[-–—to]+\s*(\d{4}|present|current|now)/i;
-  const YEAR_ONLY    = /\b(20|19)\d{2}\b/;
-  const BULLET_LINE  = /^[•\-*\u2013\u2022\u25CF➤➢▶►→]\s*|^\d+[\.\)]\s+[A-Z]/;
-  const LONG_LINE    = (s: string) => s.length > 130;
+  // ── 5. Skills ─────────────────────────────────────────────────────────────
+  const skillRaw = [...(sections["skills"] ?? []), ...(sections["technical"] ?? []), ...(sections["certifications"] ?? [])].filter(Boolean);
+  if (skillRaw.length) {
+    const combined = skillRaw.join(" | ");
+    const items = combined.split(/[,|•·\n\/]/)
+      .map((s) => s.replace(/^[\s\-*•:]+/, "").replace(/[\s:]+$/, "").trim())
+      .filter((s) => s.length > 1 && s.length < 80 && !/^(languages?|frameworks?|tools?|databases?|skills?):?$/i.test(s));
+    state.skills.descriptions = [...new Set(items)].slice(0, 14);
+  }
 
-  const expRaw = sections["experience"] ?? sections["employment"] ?? [];
+  // ── 6. Work Experience ────────────────────────────────────────────────────
+  /**
+   * Strategy (inspired by open-resume):
+   * 1. Split section into blank-line-separated subsections (one subsection = one job)
+   * 2. Within each subsection, the first N non-bullet short lines are header info
+   * 3. Use feature scoring: date > job-title-word > company (what remains)
+   * 4. After header lines, everything is descriptions
+   */
+  const expLines = sections["experience"] ?? sections["employment"] ?? [];
 
-  if (expRaw.length) {
-    // Group into job blocks separated by lines containing dates
-    const blocks: Array<{ headers: string[]; bullets: string[] }> = [];
-    let curBlock: { headers: string[]; bullets: string[] } | null = null;
-    let inBullets = false;
-
-    for (const line of expRaw) {
-      const isBullet   = BULLET_LINE.test(line);
-      const hasDate    = DATE_IN_LINE.test(line) || YEAR_ONLY.test(line);
-      const isLong     = LONG_LINE(line);
-
-      if (!isBullet && hasDate && !isLong) {
-        // New job starts here
-        if (curBlock) blocks.push(curBlock);
-        curBlock  = { headers: [line], bullets: [] };
-        inBullets = false;
-      } else if (curBlock && !isBullet && !inBullets && curBlock.headers.length < 4 && !isLong && line.length < 110) {
-        // Additional header info (title or company on its own line)
-        curBlock.headers.push(line);
+  if (expLines.length) {
+    // Split into paragraphs by blank lines
+    const paragraphs: string[][] = [];
+    let para: string[] = [];
+    for (const l of expLines) {
+      if (l === "") {
+        if (para.length) { paragraphs.push(para); para = []; }
       } else {
-        inBullets = true;
-        if (!curBlock) curBlock = { headers: [], bullets: [] };
-        const cleaned = line.replace(/^[•\-*\u2013\u2022\u25CF➤➢▶►→]\s*/, "").replace(/^\d+[\.\)]\s+/, "").trim();
-        if (cleaned.length > 2) curBlock.bullets.push(cleaned);
+        para.push(l);
       }
     }
-    if (curBlock) blocks.push(curBlock);
+    if (para.length) paragraphs.push(para);
+
+    // If no blank lines (single block), split by detecting bullet → non-bullet transitions
+    const blocks = paragraphs.length > 1 ? paragraphs : splitExpByBulletTransition(expLines.filter(Boolean), isBullet, hasDate);
 
     for (const block of blocks) {
-      const exp: WorkExp = { id: uid(), company: "", jobTitle: "", date: "", descriptions: block.bullets };
+      if (!block.length) continue;
 
-      // Extract date — whichever header line has it
-      const dateLineIdx = block.headers.findIndex((h) => DATE_IN_LINE.test(h) || YEAR_ONLY.test(h));
-      if (dateLineIdx !== -1) {
-        const dateLine = block.headers[dateLineIdx];
-        // Pull just the date range portion
-        const dm = dateLine.match(/(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s.]+\d{4}|\b\d{4})\s*[-–—to]+\s*(\d{4}|present|current|now)/i);
-        exp.date = dm ? dm[0] : dateLine.replace(/^[|•\-–]\s*/, "").trim();
-        // Remove date from rest of header for title/company parsing
-        block.headers.splice(dateLineIdx, 1);
+      const exp: WorkExp = { id: uid(), company: "", jobTitle: "", date: "", descriptions: [] };
+      let headerDone = false;
+      const headerLines: string[] = [];
+
+      for (const line of block) {
+        if (!headerDone && !isBullet(line) && line.length < 110 && headerLines.length < 4) {
+          headerLines.push(line);
+        } else {
+          headerDone = true;
+          const cleaned = cleanBullet(line);
+          if (cleaned.length > 2) exp.descriptions.push(cleaned);
+        }
       }
 
-      // Remaining headers: usually [jobTitle, company] or a combined line
-      const remaining = block.headers.filter((h) => h.trim().length > 0);
+      // Score header lines → date / jobTitle / company
+      let dateLineIdx = -1;
+      let jobTitleIdx = -1;
 
-      if (remaining.length >= 2) {
-        // If first line looks like a company (all caps, or ends in Ltd/Inc/Corp) → swap
-        const firstIsCo = /\b(Ltd|Inc|Corp|LLC|Pvt|PVT|Limited|Technologies|Solutions|Systems|Group|Pakistan|Global)\b|^[A-Z\s&.,]+$/.test(remaining[0]);
-        if (firstIsCo) {
-          exp.company  = remaining[0];
-          exp.jobTitle = remaining[1];
+      for (let i = 0; i < headerLines.length; i++) {
+        const h = headerLines[i];
+        if (dateLineIdx === -1 && hasDate(h)) dateLineIdx = i;
+        if (jobTitleIdx === -1 && hasJobTitleWord(h) && !hasDate(h)) jobTitleIdx = i;
+      }
+
+      // Extract date
+      if (dateLineIdx !== -1) {
+        const dline = headerLines[dateLineIdx];
+        const dm = dline.match(/(\b(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z']*[\s.,]+\d{2,4}|\b\d{4})\s*[-–—to]+\s*(\d{2,4}|present|current|now)/i);
+        exp.date = dm ? dm[0] : (dline.match(YEAR_RE) ?? [""])[0];
+        // If the date line also has a pipe-separated title/company, parse it
+        const remainder = dline.replace(DATE_RE, "").replace(YEAR_RE, "").replace(/[-–—|,\s]+/g, " ").trim();
+        if (remainder.length > 2 && PIPE_RE.test(dline)) {
+          const parts = dline.split(PIPE_RE).map(s => s.trim()).filter(Boolean);
+          // Find the non-date parts
+          const nonDate = parts.filter(p => !hasDate(p) && p.length > 1);
+          if (nonDate.length >= 2) { exp.jobTitle = nonDate[0]; exp.company = nonDate[1]; }
+          else if (nonDate.length === 1) {
+            if (hasJobTitleWord(nonDate[0])) exp.jobTitle = nonDate[0];
+            else exp.company = nonDate[0];
+          }
+          // Clear other header lines if we already extracted from the date line
+          headerLines.splice(dateLineIdx, 1);
+          jobTitleIdx = -1; // reset — we might have already assigned it
         } else {
-          exp.jobTitle = remaining[0];
-          exp.company  = remaining[1];
+          headerLines.splice(dateLineIdx, 1);
+          if (jobTitleIdx > dateLineIdx) jobTitleIdx--;
         }
-      } else if (remaining.length === 1) {
-        const line = remaining[0];
-        // "Job Title at/@ Company" or "Job Title | Company" or "Company | Job Title"
-        if (/ at | @ /i.test(line)) {
-          const parts = line.split(/ at | @ /i);
-          exp.jobTitle = parts[0].trim();
-          exp.company  = parts[1]?.trim() ?? "";
-        } else if (/\s*[|,]\s*/.test(line)) {
-          const parts = line.split(/\s*[|,]\s*/);
-          exp.jobTitle = parts[0].trim();
-          exp.company  = parts[1]?.trim() ?? "";
-        } else {
-          exp.jobTitle = line;
+      }
+
+      // Assign jobTitle & company from remaining header lines
+      if (!exp.jobTitle && !exp.company) {
+        const rem = headerLines.filter(h => h.trim().length > 0);
+
+        if (rem.length >= 2) {
+          // Determine which is company vs job title
+          const firstHasTitle = hasJobTitleWord(rem[0]);
+          const secondHasTitle = hasJobTitleWord(rem[1]);
+          if (firstHasTitle && !secondHasTitle) {
+            exp.jobTitle = rem[0]; exp.company = rem[1];
+          } else if (!firstHasTitle && secondHasTitle) {
+            exp.company = rem[0]; exp.jobTitle = rem[1];
+          } else {
+            // Default: first = title, second = company (most common format)
+            exp.jobTitle = rem[0]; exp.company = rem[1];
+          }
+          // Handle inline pipe separators in the company line
+          if (exp.company && PIPE_RE.test(exp.company)) {
+            exp.company = exp.company.split(PIPE_RE)[0].trim();
+          }
+        } else if (rem.length === 1) {
+          const line = rem[0];
+          if (/ at | @ /i.test(line)) {
+            const [a, b] = line.split(/ at | @ /i);
+            exp.jobTitle = a.trim(); exp.company = b?.trim() ?? "";
+          } else if (PIPE_RE.test(line)) {
+            const parts = line.split(PIPE_RE).map(s => s.trim()).filter(Boolean);
+            exp.jobTitle = parts[0]; exp.company = parts[1] ?? "";
+          } else if (hasJobTitleWord(line)) {
+            exp.jobTitle = line;
+          } else {
+            exp.company = line;
+          }
         }
       }
 
@@ -460,51 +534,59 @@ function textToResumeState(text: string): { state: ResumeState; isRaw: boolean }
   }
   if (state.workExperiences.length === 0) state.workExperiences.push(defaultExp());
 
-  // ── 6. Education ──────────────────────────────────────────────────────────
-  const eduRaw = sections["education"] ?? [];
-  if (eduRaw.length) {
-    // Similar block approach
-    const blocks: Array<{ headers: string[]; lines: string[] }> = [];
-    let curBlock: { headers: string[]; lines: string[] } | null = null;
+  // ── 7. Education ──────────────────────────────────────────────────────────
+  const eduLines = sections["education"] ?? sections["academic"] ?? [];
 
-    for (const line of eduRaw) {
-      const hasDate = DATE_IN_LINE.test(line) || YEAR_ONLY.test(line);
-      if (hasDate && line.length < 120) {
-        if (curBlock) blocks.push(curBlock);
-        curBlock = { headers: [line], lines: [] };
-      } else if (curBlock && curBlock.headers.length < 4 && line.length < 110) {
-        curBlock.headers.push(line);
-      } else if (curBlock) {
-        curBlock.lines.push(line);
-      } else {
-        curBlock = { headers: [line], lines: [] };
-      }
+  if (eduLines.length) {
+    const eduBlocks: string[][] = [];
+    let ep: string[] = [];
+    for (const l of eduLines) {
+      if (l === "") { if (ep.length) { eduBlocks.push(ep); ep = []; } }
+      else ep.push(l);
     }
-    if (curBlock) blocks.push(curBlock);
+    if (ep.length) eduBlocks.push(ep);
+    if (eduBlocks.length === 0) eduBlocks.push(eduLines.filter(Boolean));
 
-    for (const block of blocks) {
+    for (const block of eduBlocks) {
+      if (!block.length) continue;
       const edu = defaultEdu();
 
-      const dateIdx = block.headers.findIndex((h) => DATE_IN_LINE.test(h) || YEAR_ONLY.test(h));
-      if (dateIdx !== -1) {
-        const dm = block.headers[dateIdx].match(/\b(20|19)\d{2}\b/g);
-        edu.date = dm ? dm.join(" – ") : block.headers[dateIdx];
-        block.headers.splice(dateIdx, 1);
-      }
-
-      const gpaLine = [...block.headers, ...block.lines].find((l) => /gpa|cgpa/i.test(l));
-      if (gpaLine) edu.gpa = (gpaLine.match(/[\d.]+\s*\/\s*[\d.]+|[\d.]+/) ?? [])[0] ?? "";
-
-      const remaining = block.headers.filter((h) => h.trim().length > 0);
-      edu.degree = remaining[0] ?? "";
-      edu.school = remaining[1] ?? remaining[0] ?? "";
-      if (remaining.length === 1) { edu.school = ""; }  // will be filled below if possible
-
-      // If only 1 header line, try to split "Degree, University"
-      if (remaining.length === 1) {
-        const single = remaining[0];
-        if (/university|college|institute|school|FAST|NUST|LUMS|COMSATS|UET|IBA|NED/i.test(single)) {
-          edu.school = single; edu.degree = "";
+      // Check if it's a pipe-separated single line: "Degree | School | Date | GPA"
+      if (block.length === 1 && PIPE_RE.test(block[0])) {
+        const parts = block[0].split(PIPE_RE).map(s => s.trim());
+        for (const part of parts) {
+          if (/gpa|cgpa/i.test(part)) {
+            edu.gpa = (part.match(/[\d.]+\/[\d.]+|[\d.]+/) ?? [""])[0];
+          } else if (hasDate(part) || YEAR_RE.test(part)) {
+            const years = part.match(/\b(20|19)\d{2}\b/g) ?? [];
+            edu.date = years.join(" – ");
+          } else if (/university|college|institute|FAST|NUST|LUMS|COMSATS|UET|IBA|NED|GIK|GIKI|AKU|BNU|PIEAS/i.test(part)) {
+            edu.school = part;
+          } else if (!edu.degree && part.length > 3) {
+            edu.degree = part;
+          }
+        }
+      } else {
+        // Multi-line block
+        const dateIdx = block.findIndex(h => hasDate(h));
+        if (dateIdx !== -1) {
+          const years = block[dateIdx].match(/\b(20|19)\d{2}\b/g) ?? [];
+          edu.date = years.join(" – ");
+          const gpaLine = block.find(l => /gpa|cgpa/i.test(l));
+          if (gpaLine) edu.gpa = (gpaLine.match(/[\d.]+\/[\d.]+|[\d.]+/) ?? [""])[0];
+          const nonDate = block.filter((_, i) => i !== dateIdx && !/gpa|cgpa/i.test(block[i]));
+          edu.degree = nonDate[0] ?? "";
+          edu.school = nonDate[1] ?? "";
+          // If the date line also has pipe-separated info
+          if (PIPE_RE.test(block[dateIdx])) {
+            const parts = block[dateIdx].split(PIPE_RE).map(s => s.trim());
+            const noDt = parts.filter(p => !hasDate(p) && !/gpa|cgpa/i.test(p) && p.length > 1);
+            if (noDt.length && !edu.degree) edu.degree = noDt[0];
+            if (noDt.length > 1 && !edu.school) edu.school = noDt[1];
+          }
+        } else {
+          edu.degree = block[0] ?? "";
+          edu.school = block[1] ?? "";
         }
       }
 
@@ -513,31 +595,58 @@ function textToResumeState(text: string): { state: ResumeState; isRaw: boolean }
   }
   if (state.educations.length === 0) state.educations.push(defaultEdu());
 
-  // ── 7. Projects ───────────────────────────────────────────────────────────
-  const projRaw = sections["projects"] ?? [];
-  if (projRaw.length) {
+  // ── 8. Projects ───────────────────────────────────────────────────────────
+  const projLines = sections["projects"] ?? [];
+  if (projLines.length) {
     let curP: Project | null = null;
-    for (const line of projRaw) {
-      const isBullet = BULLET_LINE.test(line);
-      if (!isBullet && line.length < 100) {
+    for (const line of projLines.filter(Boolean)) {
+      if (!isBullet(line) && line.length < 100) {
         if (curP) state.projects.push(curP);
         curP = { id: uid(), project: line, date: "", descriptions: [] };
       } else if (curP) {
-        const cleaned = line.replace(/^[•\-*\u2013\u2022]\s*/, "").trim();
-        if (cleaned.length > 2) curP.descriptions.push(cleaned);
+        const c = cleanBullet(line);
+        if (c.length > 2) curP.descriptions.push(c);
       }
     }
     if (curP) state.projects.push(curP);
   }
   if (state.projects.length === 0) state.projects.push(defaultProj());
 
-  // ── 8. Quality check ─────────────────────────────────────────────────────
-  const meaningful =
-    !!(state.profile.name || state.profile.email) &&
-    (state.workExperiences[0]?.jobTitle !== "" || state.educations[0]?.school !== "");
+  // ── 9. Quality check — LENIENT ────────────────────────────────────────────
+  // Only fall back to raw mode if we literally couldn't find ANY identifying info.
+  // If we found contact info, show the builder (user can fix fields manually).
+  const meaningful = !!(state.profile.name || state.profile.email || state.profile.phone);
 
   return { state, isRaw: !meaningful };
 }
+
+/** Fallback: split a flat experience block by detecting bullet→non-bullet transitions */
+function splitExpByBulletTransition(
+  lines: string[],
+  isBullet: (s: string) => boolean,
+  hasDate: (s: string) => boolean,
+): string[][] {
+  const blocks: string[][] = [];
+  let cur: string[] = [];
+  let inBullets = false;
+
+  for (const line of lines) {
+    const bullet = isBullet(line);
+    if (inBullets && !bullet && line.length < 100) {
+      // Transition out of bullets → new job starts
+      if (cur.length) blocks.push(cur);
+      cur = [line];
+      inBullets = false;
+    } else {
+      cur.push(line);
+      if (bullet) inBullets = true;
+      else if (hasDate(line)) inBullets = false;
+    }
+  }
+  if (cur.length) blocks.push(cur);
+  return blocks.length ? blocks : [lines];
+}
+
 
 
 
