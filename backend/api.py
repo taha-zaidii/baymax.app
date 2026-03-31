@@ -18,13 +18,50 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+try:
+    from slowapi import Limiter, _rate_limit_exceeded_handler
+    from slowapi.util import get_remote_address
+    from slowapi.errors import RateLimitExceeded
+    _limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+    _rate_limiting_available = True
+except ImportError:
+    _limiter = None
+    _rate_limiting_available = False
+
 from config import validate_keys, APP_TITLE, DEBUG, GROQ_API_KEY, SERPER_API_KEY
+
+# ── Responsible AI: Input Sanitization ────────────────────────────────────────
+_MAX_RESUME_CHARS = 20_000   # ~8 pages of text
+_MAX_JD_CHARS     = 10_000
+_MAX_MSG_CHARS    = 4_000
+
+BANNED_PATTERNS = [
+    "ignore all previous instructions",
+    "ignore previous instructions",
+    "you are now",
+    "act as if",
+    "jailbreak",
+    "dan mode",
+]
+
+def _sanitize(text: str, max_chars: int = _MAX_RESUME_CHARS) -> str:
+    """Truncate oversized inputs and reject obvious prompt-injection attempts."""
+    text = text[:max_chars]  # hard truncate
+    lower = text.lower()
+    for pat in BANNED_PATTERNS:
+        if pat in lower:
+            raise HTTPException(
+                status_code=400,
+                detail="Input contains disallowed content. Please submit a standard resume or job description."
+            )
+    return text
+
 
 # ── In-memory interview session store ────────────────────────────────────────
 # Maps session_id -> {job_title, resume_summary, history, question_num}
@@ -36,6 +73,20 @@ app = FastAPI(
     description="Baymax AI — Multi-Agent Career Assistant Backend",
     version="2.0.0",
 )
+
+# ── Rate Limiting (Responsible AI guardrail) ──────────────────────────────────
+if _rate_limiting_available and _limiter:
+    app.state.limiter = _limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+def rate_limit(limit: str = "10/minute"):
+    """Decorator factory — no-ops gracefully if slowapi not installed."""
+    def decorator(func):
+        if _rate_limiting_available and _limiter:
+            return _limiter.limit(limit)(func)
+        return func
+    return decorator
+
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
 app.add_middleware(
@@ -121,15 +172,18 @@ async def resume_analyze(request: ResumeAnalyzeRequest):
         from agents.resume_agent import analyze_resume_structured
         from agents.memory_agent import save_resume_analysis
 
-        if len(request.resume_text.strip()) < 20:
+        resume_text = _sanitize(request.resume_text, _MAX_RESUME_CHARS)
+        job_desc    = _sanitize(request.job_description, _MAX_JD_CHARS)
+
+        if len(resume_text.strip()) < 20:
             raise HTTPException(status_code=400, detail="resume_text is too short")
-        if len(request.job_description.strip()) < 10:
+        if len(job_desc.strip()) < 10:
             raise HTTPException(status_code=400, detail="job_description is required")
 
-        result = analyze_resume_structured(request.resume_text, request.job_description)
+        result = analyze_resume_structured(resume_text, job_desc)
 
         try:
-            save_resume_analysis("default", request.job_description[:80], result)
+            save_resume_analysis("default", job_desc[:80], result)
         except Exception:
             pass
 
@@ -153,27 +207,34 @@ async def resume_analyze_upload(
     """Upload a resume PDF + job description → structured analysis JSON."""
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    # Responsible AI: validate file size (max 5 MB)
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="PDF too large. Maximum size is 5 MB.")
     try:
         from agents.resume_agent import analyze_resume_structured
         from agents.memory_agent import save_resume_analysis
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            contents = await file.read()
             tmp.write(contents)
             tmp_path = tmp.name
 
         resume_text = _extract_pdf(tmp_path)
         os.unlink(tmp_path)
 
+        resume_text = _sanitize(resume_text, _MAX_RESUME_CHARS)
+        job_desc    = _sanitize(job_description, _MAX_JD_CHARS)
+
         if len(resume_text.strip()) < 20:
             raise HTTPException(status_code=400, detail="Could not extract text from PDF")
 
-        result = analyze_resume_structured(resume_text, job_description)
+        result = analyze_resume_structured(resume_text, job_desc)
 
         try:
-            save_resume_analysis("default", job_description[:80], result)
+            save_resume_analysis("default", job_desc[:80], result)
         except Exception:
             pass
+
 
         return result
 
@@ -576,11 +637,13 @@ async def roadmap_chat(request: RoadmapChatRequest):
     try:
         from agents.career_planner_agent import chat_with_rahul, get_financial_aid_template
 
+        safe_msg = _sanitize(request.user_message, _MAX_MSG_CHARS)
+
         result = chat_with_rahul(
-            user_message=request.user_message,
-            conversation_history=request.conversation_history,
-            job_title=request.job_title,
-            skills_gap=request.skills_gap,
+            user_message=safe_msg,
+            conversation_history=request.conversation_history[-20:],  # cap history
+            job_title=request.job_title[:100],
+            skills_gap=request.skills_gap[:500],
         )
 
         if result.get("show_aid"):
@@ -592,8 +655,11 @@ async def roadmap_chat(request: RoadmapChatRequest):
             result["aid_template"] = template
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Roadmap chat error: {str(e)}")
+
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
