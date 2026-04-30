@@ -180,15 +180,23 @@ export function useUserSession() {
         .filter((v, i, a) => a.indexOf(v) === i)
         .slice(0, 15);
 
-      setSession({
+      // Patch the session with everything we got from the analysis. Crucially we
+      // only overwrite finalResumeText when the analyzer actually has new text
+      // for it — otherwise an empty string from the PDF-upload code path would
+      // wipe the builder's content to undefined and crash every later .trim()
+      // call (this was the cause of the post-analyze black-screen).
+      const patch: Partial<UserSession> = {
         analysisResult: result,
         targetJobTitle,
         jobDescription,
-        finalResumeText: resumeText || undefined as unknown as string,
         skillsGap,
         currentSkills,
         skillsList: [...new Set([...skillsGap, ...currentSkills])],
-      });
+      };
+      if (resumeText && resumeText.trim().length > 0) {
+        patch.finalResumeText = resumeText;
+      }
+      setSession(patch);
     },
     [setSession]
   );

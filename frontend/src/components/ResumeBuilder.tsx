@@ -19,7 +19,8 @@ import {
   Code2, Layers, Upload, FileText, ArrowRight,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { extractResume } from "@/lib/api";
+import { extractResume, parseResumeStructured } from "@/lib/api";
+import type { ParsedResume } from "@/lib/api";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -620,6 +621,126 @@ function textToResumeState(text: string): { state: ResumeState; isRaw: boolean }
   return { state, isRaw: !meaningful };
 }
 
+// ── Structured-parse → ResumeState mapper ─────────────────────────────────
+// The backend hands back already-classified bullet lists per section. The
+// builder needs to bucket those bullets back into individual jobs / projects /
+// education entries, since each one is rendered as its own card.
+
+function isStateEmpty(s: ResumeState): boolean {
+  if (s.profile.name || s.profile.email || s.profile.phone) return false;
+  if (s.workExperiences.some(e => e.company || e.jobTitle || e.descriptions.some(Boolean))) return false;
+  if (s.educations.some(e => e.school || e.degree)) return false;
+  if (s.projects.some(p => p.project || p.descriptions.some(Boolean))) return false;
+  if (s.skills.descriptions.filter(Boolean).length) return false;
+  return true;
+}
+
+function parsedResumeToState(parsed: ParsedResume): ResumeState {
+  const profile: Profile = {
+    name: parsed.profile?.name ?? "",
+    email: parsed.profile?.email ?? "",
+    phone: parsed.profile?.phone ?? "",
+    location: "",
+    url: parsed.profile?.linkedin || parsed.profile?.github || "",
+    summary: parsed.summary ?? "",
+  };
+
+  // Group consecutive bullet entries under the previous header line. A "header"
+  // is a short-ish line with no leading bullet character — typically the role
+  // or company line. The first sub-line that contains a date sequence becomes
+  // the entry's date.
+  const groupBullets = <T,>(
+    bullets: string[],
+    factory: (header: string, date: string, body: string[]) => T,
+  ): T[] => {
+    const out: T[] = [];
+    let header = "";
+    let date = "";
+    let body: string[] = [];
+    const flush = () => {
+      if (header || body.length) out.push(factory(header, date, body));
+      header = ""; date = ""; body = [];
+    };
+    const dateRe = /\b(20|19)\d{2}\b|\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/i;
+    for (const raw of bullets) {
+      const line = raw.trim();
+      if (!line) continue;
+      const looksLikeHeader = line.length < 110 && !line.startsWith("- ") && !/^•/.test(line);
+      if (looksLikeHeader && (header || body.length)) {
+        flush();
+        header = line;
+      } else if (!header) {
+        header = line;
+      } else {
+        body.push(line);
+      }
+      // Sniff a date anywhere in the line and remember the first one.
+      if (!date) {
+        const m = line.match(/\b(20|19)\d{2}\b\s*[-–—to]+\s*(20|19)?\d{2,4}|\b(20|19)\d{2}\b/);
+        if (m) date = m[0];
+      }
+      if (line.length > 110 && header && !body.length) {
+        // Long first line is more likely a description than a header.
+        body.push(line);
+      }
+      // Treat lines that are clearly a date label as the entry's date too.
+      if (dateRe.test(line) && line.length < 30 && !date) date = line;
+    }
+    flush();
+    return out;
+  };
+
+  const workExperiences: WorkExp[] = groupBullets(
+    parsed.experience ?? [],
+    (header, date, body) => {
+      // Header is often "Role, Company (Date)" — split on the first comma.
+      const [roleOrCompany, ...rest] = header.split(/[,|]/);
+      const exp = defaultExp();
+      exp.jobTitle = (roleOrCompany || "").trim();
+      exp.company = rest.join(",").replace(/\(.*?\)/, "").trim();
+      exp.date = date;
+      exp.descriptions = body.length ? body : [""];
+      return exp;
+    },
+  );
+
+  const educations: Education[] = groupBullets(
+    parsed.education ?? [],
+    (header, date, body) => {
+      const edu = defaultEdu();
+      const parts = header.split(/[,|]/).map(s => s.trim()).filter(Boolean);
+      edu.degree = parts[0] || header;
+      edu.school = parts.slice(1).join(", ");
+      edu.date = date;
+      // Pull GPA out of body if present.
+      const gpaLine = body.find(b => /gpa|cgpa/i.test(b));
+      if (gpaLine) edu.gpa = (gpaLine.match(/[\d.]+\/[\d.]+|[\d.]+/) ?? [""])[0];
+      edu.descriptions = body.filter(b => b !== gpaLine);
+      return edu;
+    },
+  );
+
+  const projects: Project[] = groupBullets(
+    parsed.projects ?? [],
+    (header, date, body) => {
+      const proj = defaultProj();
+      proj.project = header;
+      proj.date = date;
+      proj.descriptions = body.length ? body : [""];
+      return proj;
+    },
+  );
+
+  return {
+    profile,
+    workExperiences: workExperiences.length ? workExperiences : [defaultExp()],
+    educations:      educations.length      ? educations      : [defaultEdu()],
+    projects:        projects.length        ? projects        : [defaultProj()],
+    skills:          { descriptions: (parsed.skills ?? []).filter(Boolean).slice(0, 30) },
+  };
+}
+
+
 /** Fallback: split a flat experience block by detecting bullet→non-bullet transitions */
 function splitExpByBulletTransition(
   lines: string[],
@@ -674,24 +795,47 @@ const ResumeBuilder = ({ jobTitle = "", onResumeTextChange, onProceedToAnalysis 
   const setLoading = (k: string, v: boolean) => setAiLoading((p) => ({ ...p, [k]: v }));
 
   // ── PDF Upload & Parse ──────────────────────────────────────────────────────
+  // Strategy:
+  //   1. Try the backend's structural parser first (heuristic, deterministic,
+  //      already split into profile/summary/sections).
+  //   2. If that fails or returns thin output, fall back to /extract-resume +
+  //      the in-component textToResumeState() heuristics.
+  //   3. If both fail to find any structure, drop into the raw-text editor.
 
   const handlePdfUpload = async (file: File) => {
     setUploadLoading(true);
     try {
-      const result = await extractResume(file);
-      const { state, isRaw } = textToResumeState(result.extracted_text);
-      if (isRaw) {
-        // fallback: give user rope to edit the raw text
-        setRawResumeText(result.extracted_text);
-        setIsRawMode(true);
-        onResumeTextChange?.(result.extracted_text);
-        toast({ title: "📄 Parsed (raw mode)", description: "Format unclear — editing raw text." });
-      } else {
-        setData(state);
-        onResumeTextChange?.(resumeStateToText(state));
-        setIsRawMode(false);
-        toast({ title: "✅ Resume parsed!", description: "Review and edit any fields below." });
+      let mappedState: ResumeState | null = null;
+      let rawText = "";
+
+      try {
+        const res = await parseResumeStructured(file);
+        rawText = res.extracted_text || "";
+        mappedState = parsedResumeToState(res.parsed);
+      } catch {
+        // Backend structured parse failed — fall through to plain extraction.
       }
+
+      // If the structured parse was empty, fall back to the heuristic JS parser.
+      if (!mappedState || isStateEmpty(mappedState)) {
+        const fallback = await extractResume(file);
+        rawText = fallback.extracted_text || rawText;
+        const { state, isRaw } = textToResumeState(rawText);
+        if (isRaw) {
+          setRawResumeText(rawText);
+          setIsRawMode(true);
+          onResumeTextChange?.(rawText);
+          toast({ title: "📄 Parsed (raw mode)", description: "Format unclear — editing raw text." });
+          setMode("build");
+          return;
+        }
+        mappedState = state;
+      }
+
+      setData(mappedState);
+      onResumeTextChange?.(resumeStateToText(mappedState));
+      setIsRawMode(false);
+      toast({ title: "✅ Resume parsed!", description: "Review and edit any fields below." });
       setMode("build");
     } catch (e) {
       toast({ title: "Upload failed", description: String(e), variant: "destructive" });

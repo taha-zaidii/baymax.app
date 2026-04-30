@@ -104,6 +104,12 @@ def _extract_pdf(tmp_path: str) -> str:
     return extract_text_from_pdf(tmp_path)
 
 
+def _structure_pdf(tmp_path: str) -> dict:
+    """Return the resume parsed into {profile, summary, sections..., raw_text}."""
+    from tools.pdf_tool import extract_structured_resume
+    return extract_structured_resume(tmp_path)
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # HEALTH
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -150,6 +156,47 @@ async def extract_resume(file: UploadFile = File(...)):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESUME — Structured parse for the Resume Builder import flow
+# ─────────────────────────────────────────────────────────────────────────────
+# /resume/parse runs the heuristic structurer in tools/pdf_tool.py and returns
+# the resume already split into profile / summary / education / experience /
+# skills / projects / certifications. The Resume Builder maps this directly
+# to its form state, which is far more reliable than re-parsing the flat
+# extracted text on the client.
+
+@app.post("/resume/parse")
+async def parse_resume(file: UploadFile = File(...)):
+    """Upload a resume PDF and get a fully structured JSON payload back."""
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are supported")
+    contents = await file.read()
+    if len(contents) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="PDF too large. Maximum size is 5 MB.")
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        structured = _structure_pdf(tmp_path)
+        os.unlink(tmp_path)
+
+        # Hide raw_text from the parsed payload — it is returned separately so
+        # the analyzer endpoint can store it on the session without forcing
+        # the Builder to think about it.
+        raw_text = structured.pop("raw_text", "")
+        return {
+            "success": True,
+            "filename": file.filename,
+            "parsed": structured,
+            "extracted_text": raw_text,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"PDF parse error: {str(e)}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -235,7 +282,13 @@ async def resume_analyze_upload(
         except Exception:
             pass
 
-
+        # Pass the extracted text back to the frontend so the user session can
+        # remember the candidate's resume content even when they uploaded a PDF
+        # rather than building one in the Builder. Without this every
+        # downstream agent (interview / jobs / roadmap) would have an empty
+        # resume context.
+        if isinstance(result, dict):
+            result.setdefault("extracted_resume_text", resume_text)
         return result
 
     except HTTPException:
@@ -462,6 +515,7 @@ async def interview_reply(request: InterviewReplyRequest):
             latest_answer=request.answer,
             question_num=request.question_num,
             total_questions=8,
+            resume_summary=session.get("resume_summary", ""),
         )
 
         feedback = result.get("feedback", "Good answer!")
@@ -534,8 +588,15 @@ async def search_jobs(
     user_id: str = Form("default"),
 ):
     """
-    Search for matching jobs using Firecrawl (primary) or Serper (fallback).
-    Returns 6 formatted job cards.
+    Search for matching jobs.
+
+    Returns a structured payload:
+        {
+          "jobs":            [JobItem, ...],
+          "top_skill_gap":   str,
+          "application_tip": str,
+          "query_meta":      {...}
+        }
     """
     try:
         from agents.job_search_agent import find_jobs
@@ -543,7 +604,7 @@ async def search_jobs(
 
         parsed_skills = [s.strip() for s in skills_list.split(",") if s.strip()] if skills_list else []
 
-        jobs = find_jobs(
+        result = find_jobs(
             job_title=job_title,
             skills_summary=skills_summary,
             skills_list=parsed_skills,
@@ -554,7 +615,7 @@ async def search_jobs(
         except Exception:
             pass
 
-        return {"jobs": jobs}
+        return result
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Job search error: {str(e)}")
@@ -618,6 +679,76 @@ async def get_certifications(request: CertRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Certifications error: {str(e)}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ROADMAP — CSP Solver (course-required AI algorithm)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Wraps the deterministic CSP planner in agents/csp_planner.py.
+# The endpoint takes a list of skill gaps plus weekly-hour budget and returns
+# the final assignment together with a full step-by-step trace that the
+# frontend animates. This is the algorithm that satisfies the CS 2005
+# "AI technique + visualization" requirement.
+
+class CSPRoadmapRequest(BaseModel):
+    skills_gap: List[str]
+    total_weeks: int = 12
+    weekly_hour_budget: int = 15
+
+
+@app.post("/roadmap/csp")
+async def roadmap_csp(request: CSPRoadmapRequest):
+    """
+    Solve the career roadmap as a Constraint Satisfaction Problem.
+
+    Returns
+    -------
+    success            bool   -- did the solver find a complete assignment?
+    reason             str    -- ok | unary_dead_end | ac3_dead_end | bt_failed
+    assignment         dict   -- {task_id: week_number}
+    tasks              list   -- variable definitions (id, label, hours, ...)
+    constraints        dict   -- prerequisites, exclusives, weekly budget
+    trace              list   -- ordered events for the visualizer
+    stats              dict   -- counters (arc checks, prunings, backtracks)
+    """
+    try:
+        from agents.csp_planner import solve_roadmap_csp
+
+        # Validate the small, well-defined parameter space.
+        if not request.skills_gap:
+            raise HTTPException(
+                status_code=400,
+                detail="skills_gap must contain at least one skill",
+            )
+        if not (4 <= request.total_weeks <= 26):
+            raise HTTPException(
+                status_code=400,
+                detail="total_weeks must be between 4 and 26",
+            )
+        if not (4 <= request.weekly_hour_budget <= 60):
+            raise HTTPException(
+                status_code=400,
+                detail="weekly_hour_budget must be between 4 and 60",
+            )
+
+        # Light-weight sanitisation of free-text gap labels.
+        clean_gaps = [
+            _sanitize(g, _MAX_MSG_CHARS).strip()
+            for g in request.skills_gap
+            if g and g.strip()
+        ]
+
+        return solve_roadmap_csp(
+            clean_gaps,
+            total_weeks=request.total_weeks,
+            weekly_hour_budget=request.weekly_hour_budget,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"CSP solver error: {str(e)}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

@@ -57,6 +57,52 @@ export async function extractResume(file: File): Promise<ExtractResponse> {
   return response.json();
 }
 
+// ─── Structured resume parse ──────────────────────────────────────────────
+// Mirrors the backend `/resume/parse` endpoint — returns the resume already
+// split into profile / summary / education / experience / skills / projects.
+
+export interface ParsedResumeProfile {
+  name: string;
+  email: string;
+  phone: string;
+  linkedin: string;
+  github: string;
+}
+
+export interface ParsedResume {
+  profile: ParsedResumeProfile;
+  summary: string;
+  education: string[];
+  experience: string[];
+  skills: string[];
+  projects: string[];
+  certifications: string[];
+}
+
+export interface ParseResumeResponse {
+  success: boolean;
+  filename: string;
+  parsed: ParsedResume;
+  extracted_text: string;
+}
+
+export async function parseResumeStructured(file: File): Promise<ParseResumeResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_BASE_URL}/resume/parse`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error((error as { detail?: string }).detail || "Failed to parse resume");
+  }
+
+  return response.json();
+}
+
 /**
  * Run the full pipeline analysis
  */
@@ -388,6 +434,42 @@ export interface Certification {
   why_relevant: string;
 }
 
+// ─── Job Scout structured response ──────────────────────────────────────────
+//
+// Backend now returns a deterministic list of typed JobItem objects (no LLM
+// decoration). The frontend renders proper cards from this — see
+// components/JobScout.tsx. Mirrors find_jobs() in agents/job_search_agent.py.
+
+export interface JobItem {
+  id: string;
+  company: string;
+  role: string;
+  level: string;            // Internship / Trainee / Junior / Entry Level / Graduate
+  location: string;         // "Karachi, Pakistan" or "Remote"
+  url: string;
+  domain: string;
+  source: string;           // "Rozee.pk" / "LinkedIn" / ...
+  match_pct: number;        // 0-100
+  snippet: string;
+  skills_matched: string[];
+  salary: string | null;
+}
+
+export interface JobsResponse {
+  jobs: JobItem[];
+  top_skill_gap: string;
+  application_tip: string;
+  query_meta: {
+    experience_level: string;
+    year: string;
+    job_title: string;
+    skills_used: string[];
+    raw_hits: number;
+    kept_after_spam: number;
+    returned: number;
+  };
+}
+
 /**
  * Search jobs — sends the full structured skills list for personalised results.
  */
@@ -396,7 +478,7 @@ export async function searchJobsWithSkills(
   skillsSummary: string,
   skillsList: string[],
   userId: string,
-): Promise<{ jobs: string }> {
+): Promise<JobsResponse> {
   const formData = new FormData();
   formData.append("job_title", jobTitle);
   formData.append("skills_summary", skillsSummary);
@@ -503,6 +585,87 @@ export async function getCertifications(
   }
   return response.json();
 }
+
+// ── CSP Roadmap Solver (course-required AI algorithm) ────────────────────────
+//
+// Mirrors backend/agents/csp_planner.py. The frontend asks the backend for
+// the full trace of the solver in one call, then animates it locally —
+// keeping the UX snappy and the demo reproducible for grading.
+
+export interface CSPTask {
+  id: string;
+  label: string;
+  skill: string;
+  hours: number;
+  category: string;
+  earliest_week: number;
+  deadline_week: number | null;
+}
+
+export interface CSPConstraints {
+  prerequisites: [string, string][];
+  exclusives: [string, string][];
+  total_weeks: number;
+  weekly_hour_budget: number;
+}
+
+export interface CSPTraceEvent {
+  step: number;
+  type: string;
+  description: string;
+  domains: Record<string, number[]>;
+  assignment: Record<string, number>;
+  variable?: string;
+  value?: number;
+  arc?: [string, string];
+  removed_values?: number[];
+  reason?: string;
+  initial_domains?: Record<string, number[]>;
+  arcs?: [string, string][];
+}
+
+export interface CSPStats {
+  ac3_arc_checks: number;
+  ac3_values_pruned: number;
+  bt_assignments: number;
+  bt_backtracks: number;
+}
+
+export interface CSPResult {
+  success: boolean;
+  reason: string;
+  assignment: Record<string, number>;
+  tasks: CSPTask[];
+  constraints: CSPConstraints;
+  trace: CSPTraceEvent[];
+  stats: CSPStats;
+}
+
+/**
+ * Run the CSP solver on the backend and return the full trace plus the
+ * final assignment. Throws on network / 4xx / 5xx; the caller owns the UI.
+ */
+export async function runCspRoadmap(
+  skillsGap: string[],
+  totalWeeks: number = 12,
+  weeklyHourBudget: number = 15,
+): Promise<CSPResult> {
+  const response = await fetch(`${API_BASE_URL}/roadmap/csp`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      skills_gap: skillsGap,
+      total_weeks: totalWeeks,
+      weekly_hour_budget: weeklyHourBudget,
+    }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error((error as { detail?: string }).detail || "CSP solver request failed");
+  }
+  return response.json();
+}
+
 
 // ── Rahul Interactive Chat ────────────────────────────────────────────────────
 

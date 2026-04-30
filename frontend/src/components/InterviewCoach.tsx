@@ -21,11 +21,14 @@ interface Turn {
   score: number;
 }
 
-// Augment window type for SpeechRecognition
+// SpeechRecognition is a browser API and not a TypeScript built-in. Declare
+// the surface we actually use so the file typechecks without a DOM-lib dep.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type SpeechRecognition = any;
 declare global {
   interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
+    SpeechRecognition: SpeechRecognition;
+    webkitSpeechRecognition: SpeechRecognition;
   }
 }
 

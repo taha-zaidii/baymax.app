@@ -58,7 +58,14 @@ async function analyzeResumeJSON(resumeText: string, jobDescription: string): Pr
   return res.json();
 }
 
-async function analyzeResumePDF(file: File, jobDescription: string): Promise<AnalysisResult> {
+// Returns both the analysis and the extracted resume text so the caller can
+// stash the resume content into the user session even when the user only
+// uploaded a PDF (no Builder content). Without this every downstream agent
+// would see an empty resume and produce generic output.
+async function analyzeResumePDF(
+  file: File,
+  jobDescription: string,
+): Promise<{ analysis: AnalysisResult; extractedText: string }> {
   const form = new FormData();
   form.append("file", file);
   form.append("job_description", jobDescription);
@@ -70,7 +77,11 @@ async function analyzeResumePDF(file: File, jobDescription: string): Promise<Ana
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || `HTTP ${res.status}`);
   }
-  return res.json();
+  const json = await res.json();
+  const extractedText: string = (json && typeof json.extracted_resume_text === "string")
+    ? json.extracted_resume_text
+    : "";
+  return { analysis: json, extractedText };
 }
 
 // ── Normalize API response — fill in all missing/null fields ────────────────
@@ -190,17 +201,21 @@ const ResumeAnalyzer = ({ onSwitchTab, onAnalysisComplete, builderResumeText, us
     setLoading(true);
     try {
       let data: AnalysisResult;
+      let extractedText = "";
       if (useCurrentResume && builderResumeText) {
         data = await analyzeResumeJSON(builderResumeText, jobDescription);
       } else if (pdfFile) {
-        data = await analyzeResumePDF(pdfFile, jobDescription);
+        const r = await analyzeResumePDF(pdfFile, jobDescription);
+        data = r.analysis;
+        extractedText = r.extractedText;
       } else {
         throw new Error("No resume source selected");
       }
       const safe = normalizeResult(data);
       setResult(safe);
-      // Pass NORMALIZED result to Dashboard — raw data can have null fields that crash parent
-      const resumeText = (useCurrentResume && builderResumeText) ? builderResumeText : "";
+      // Push the resume text into the parent session so downstream agents
+      // (interview / jobs / roadmap) actually have something to personalise on.
+      const resumeText = (useCurrentResume && builderResumeText) ? builderResumeText : extractedText;
       onAnalysisComplete?.(safe, jobDescription, resumeText);
 
       // Persist to backend Mem0 (fire-and-forget)

@@ -66,9 +66,9 @@ const TABS = [
     id: 4,
     icon: Map,
     label: "Career Roadmap",
-    sublabel: "90-day personalised plan",
-    agent: "Abigail",
-    agentTitle: "90-Day Career Roadmap Planner",
+    sublabel: "CSP-scheduled learning plan",
+    agent: "Rahul",
+    agentTitle: "CSP Career Roadmap Planner (AC-3 + Backtracking)",
     color: "#d97706",
   },
 ];
