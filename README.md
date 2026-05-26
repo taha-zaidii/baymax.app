@@ -1,183 +1,152 @@
-# Baymax — AI Career Coaching System
+# Baymax — Multi-Agent AI Career Coaching Platform
 
-<div align="center">
+> Pakistan's first multi-agent AI career platform. Five specialized agents share a live `CareerContext` through a hierarchical orchestrator. Powered by LLaMA 3.3 70B on Groq, with a CSP-based 90-day roadmap planner solving AC-3 + backtracking under the hood.
 
-**Multi-agent AI career coach with a Constraint-Satisfaction-Problem roadmap planner.**
-
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-baymax--app--six.vercel.app-red?style=for-the-badge)](https://baymax-app-six.vercel.app)
-[![Backend](https://img.shields.io/badge/Backend-DigitalOcean-blue?style=for-the-badge)](https://baymax-app-ozhwo.ondigitalocean.app/health)
-[![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-
-</div>
-
-> **CS 2005 Final Submission · FAST NUCES Karachi · Spring 2026.**
-> The graded artefact is the CSP solver and its animated visualization.
-> Read **[`PROJECT_REPORT.md`](PROJECT_REPORT.md)** for the full writeup
-> with code excerpts, screenshots and test cases.
+[![Live Demo](https://img.shields.io/badge/Live-baymax--app--six.vercel.app-000000?style=flat-square&logo=vercel&logoColor=white)](https://baymax-app-six.vercel.app)
+[![Backend](https://img.shields.io/badge/Backend-DigitalOcean-0080FF?style=flat-square&logo=digitalocean&logoColor=white)](https://www.digitalocean.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB.svg?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-14-000000?style=flat-square&logo=nextdotjs&logoColor=white)](https://nextjs.org/)
 
 ---
 
-## CS 2005 — Quick Reference for Grading
+## What Baymax does
 
-| Course requirement | Where it lives in this repo |
-|-------------------|----------------------------|
-| **AI technique** — CSP (AC-3 + Backtracking with MRV / LCV / Forward-Checking) | [`backend/agents/csp_planner.py`](backend/agents/csp_planner.py) |
-| **Algorithm pipeline** — unary → AC-3 → backtracking | `RoadmapCSP.solve()` in the same file |
-| **Visualization (compulsory)** — variables · domains · constraints · backtracking · assignments | [`frontend/src/components/CSPVisualizer.tsx`](frontend/src/components/CSPVisualizer.tsx) |
-| **UI (mandatory)** — React + Tailwind, deployed | `frontend/` — open *Roadmap → 🧠 CSP Algorithm* |
-| **Working system** | `POST /roadmap/csp` in [`backend/api.py`](backend/api.py) |
-| **Clean, commented code** | `csp_planner.py` (520 lines, fully docstring'd) and `CSPVisualizer.tsx` (top-of-file design note + inline comments) |
+Baymax is a hierarchical multi-agent system that walks a user end-to-end through career preparation. Instead of dumping advice from a single LLM call, five specialized agents collaborate over a shared context:
 
-**To grade in 30 seconds:** open the live app → click **Career Roadmap** in the sidebar → make sure **🧠 CSP Algorithm** is selected → press **Run CSP Solver** → press **▶** on the controls and watch the algorithm step through.
+| Agent | Role | Core Technique |
+|---|---|---|
+| **Resume Analyzer** | Parses uploaded resumes, extracts skills/experience/education, scores ATS-readiness | RAG over ChromaDB + HuggingFace embeddings |
+| **Voice Interview Coach** | Real-time STT → LLM-graded mock interviews with follow-up questioning | Groq Whisper STT + LLaMA 3.3 70B |
+| **Job Scout** | Live job aggregation matched against resume + preferences | Serper API across LinkedIn, Indeed, Rozee.pk, Mustakbil |
+| **Roadmap Planner** | Generates a personalized 90-day learning plan that respects time, prerequisite, and difficulty constraints | **CSP — AC-3 arc consistency + backtracking with MRV / LCV / forward-checking** |
+| **Memory** | Maintains persistent `CareerContext` across sessions so agents see prior conversations | Stateful session store |
+
+A `SafetyGuard` wrapper sits in front of every LLM call for prompt-injection detection and PII handling.
 
 ---
 
-## How to Run Locally
+## The CSP planner — what makes this not just another GPT wrapper
 
-### Prerequisites
+The roadmap planner (`backend/agents/csp_planner.py`) is a classical AI technique implementation, not an LLM hack:
 
-* **Python 3.10+** (3.11 / 3.12 tested)
-* **Node.js 18+** and **npm 9+**
-* A **Groq API key** from <https://console.groq.com/keys> — required for the LLM agents
-* *(optional)* a **Serper API key** from <https://serper.dev> — only the Job Scout uses it
+1. **Variables** — each of N days in the 90-day window
+2. **Domains** — pruned by unary constraints (time budget, current skill level, prerequisite chains)
+3. **AC-3** — enforces arc consistency between dependent skill nodes (you can't schedule "Advanced Pandas" before "Python Basics")
+4. **Backtracking search** — with three classical heuristics layered on top:
+   - **MRV** (Minimum Remaining Values) for variable selection
+   - **LCV** (Least Constraining Value) for value ordering
+   - **Forward-checking** for early failure detection
+5. **Interactive React visualization** — frontend animates the algorithm in real time so users can see the planner reason
 
-Copy `.env.example` to `.env` at the repo root and fill in `GROQ_API_KEY` (and `SERPER_API_KEY` if you have one).
+Worked walkthrough in [PROJECT_REPORT.md](PROJECT_REPORT.md).
 
-### Backend
+---
 
-```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate            # Windows: .\venv\Scripts\activate
-pip install -r requirements.txt
-uvicorn api:app --reload --port 8000
+## Architecture
+
+```
+                          ┌─────────────────────────────┐
+                          │   Orchestrator (custom)     │
+                          │   ↕ shared CareerContext    │
+                          └──────────────┬──────────────┘
+                                         │
+        ┌────────────────┬───────────────┼───────────────┬─────────────────┐
+        ↓                ↓               ↓               ↓                 ↓
+   Resume Agent     Interview      Job Scout        Roadmap            Memory
+   (RAG / ATS)      Coach (Voice)  (Serper API)     Planner (CSP)      (Session)
+        │                │               │               │                 │
+        └────────────────┴──────────┬────┴───────────────┴─────────────────┘
+                                    ↓
+                          SafetyGuard (prompt-injection + PII)
+                                    ↓
+                       LLaMA 3.3 70B  on  Groq
 ```
 
-The API is now live at <http://localhost:8000>. Open <http://localhost:8000/docs> for the auto-generated Swagger UI.
+---
 
-### Frontend
+## Stack
 
-In a second terminal:
+| Layer | Tech |
+|---|---|
+| **LLM** | LLaMA 3.3 70B via Groq · Whisper STT via Groq |
+| **Agent orchestration** | CrewAI · LangChain · LangGraph · custom hierarchical orchestrator |
+| **RAG** | ChromaDB · HuggingFace sentence-transformers |
+| **Backend** | FastAPI · Uvicorn · Python 3.10+ |
+| **Frontend** | Next.js 14 · React · TypeScript · Tailwind CSS · Vite |
+| **Job aggregation** | Serper API (LinkedIn / Indeed / Rozee.pk / Mustakbil) |
+| **Deploy** | FastAPI on DigitalOcean · Frontend on Vercel |
+
+---
+
+## Quick Start
+
+**Try it live:** https://baymax-app-six.vercel.app
+
+**Run locally:**
 
 ```bash
+# Backend
+cd backend
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env       # add GROQ_API_KEY, SERPER_API_KEY (optional)
+uvicorn main:app --reload --port 8000
+
+# Frontend (separate terminal)
 cd frontend
 npm install
-npm run dev                          # Vite dev server on http://localhost:5173
+npm run dev                # http://localhost:5173 — proxies /api → backend
 ```
 
-Vite proxies all backend routes to `localhost:8000`, so you do **not** need to set `VITE_API_URL` for local development.
-
-### Production build
-
-```bash
-# Backend (Docker, optional)
-docker build -t baymax-backend backend/
-docker run --rm -p 8000:8000 --env-file .env baymax-backend
-
-# Frontend
-cd frontend && npm run build         # static bundle in frontend/dist/
-```
-
-The repo also ships `render.yaml` and `start.sh` for one-click DigitalOcean / Render deployments.
-
-### Verifying the build
-
-Quick end-to-end smoke test from the project root:
-
-```bash
-# Backend smoke test
-cd backend && source venv/bin/activate && python -c "
-from fastapi.testclient import TestClient
-from api import app
-c = TestClient(app)
-print('health:', c.get('/health').json()['status'])
-r = c.post('/roadmap/csp', json={
-    'skills_gap': ['python','docker','react','system design','machine learning','interview'],
-    'total_weeks': 12, 'weekly_hour_budget': 15})
-d = r.json()
-print('csp.success =', d['success'], '| stats =', d['stats'])
-"
-
-# Frontend production build + typecheck
-cd ../frontend && npm run build && npx tsc --noEmit -p tsconfig.app.json
-```
-
-Expected:
-
-```
-health: healthy
-csp.success = True | stats = {'ac3_arc_checks': 29, 'ac3_values_pruned': 5, 'bt_assignments': 8, 'bt_backtracks': 0}
-✓ built in ~3s     # vite
-                   # (no tsc output = no errors)
-```
+**Prerequisites:**
+- Python 3.10+
+- Node.js 18+
+- Groq API key — https://console.groq.com/keys
+- Serper API key (optional, for live job search) — https://serper.dev
 
 ---
 
-## Repository Map
+## Repository Structure
 
 ```
 baymax.app/
-├── PROJECT_REPORT.md              ← final report (proposal-style)
-├── README.md                      ← this file
-├── docs/screenshots/              ← capture instructions inside README.md
 ├── backend/
-│   ├── api.py                     FastAPI routes
-│   ├── config.py
 │   ├── agents/
-│   │   ├── csp_planner.py         ★ AI-Lab algorithm: CSP / AC-3 / Backtracking
-│   │   ├── resume_agent.py        Alex — analyzer + builder helpers
-│   │   ├── interview_agent.py     Sam — feature extraction + adaptive interview
-│   │   ├── job_search_agent.py    Zara — Serper + spam filter + Jaccard scoring
-│   │   ├── career_planner_agent.py  Rahul — LLM Plan Summary + curated resources
-│   │   └── memory_agent.py        Mem0 (graceful degradation)
-│   ├── tools/
-│   │   ├── pdf_tool.py            Plain-text + structural PDF parser
-│   │   └── search_tool.py         Serper API wrapper
-│   ├── Dockerfile · Procfile · requirements.txt · runtime.txt
-└── frontend/
-    └── src/
-        ├── pages/Index.tsx
-        ├── components/
-        │   ├── Dashboard.tsx           5-tab pipeline shell
-        │   ├── ResumeBuilder.tsx       PDF→form parser + live preview
-        │   ├── ResumeAnalyzer.tsx      ATS score + bullet rewriter
-        │   ├── InterviewCoach.tsx      Voice interview (TTS + Whisper)
-        │   ├── JobScout.tsx            Ranked job cards
-        │   ├── RoadmapPlanner.tsx      🧠 CSP / 📋 Summary / 📚 Resources
-        │   ├── CSPVisualizer.tsx       ★ AI-Lab visualization
-        │   └── BaymaxMascot.tsx
-        ├── hooks/use-user-session.ts
-        └── lib/api.ts
+│   │   ├── csp_planner.py       ← AC-3 + backtracking roadmap solver
+│   │   ├── resume_analyzer.py   ← RAG + ATS scoring
+│   │   ├── interview_coach.py   ← voice agent + grading
+│   │   ├── job_scout.py         ← Serper aggregation
+│   │   ├── memory.py            ← session-scoped CareerContext
+│   │   └── safety_guard.py      ← prompt-injection + PII layer
+│   ├── orchestrator.py          ← hierarchical agent router
+│   ├── main.py                  ← FastAPI entry
+│   └── requirements.txt
+├── frontend/
+│   ├── src/components/
+│   │   ├── CSPVisualizer.tsx    ← live algorithm animation
+│   │   ├── ResumeUpload.tsx
+│   │   ├── InterviewRoom.tsx
+│   │   └── JobBoard.tsx
+│   └── package.json
+├── docs/                        ← screenshots, architecture diagrams
+├── PROJECT_REPORT.md            ← full technical writeup
+├── render.yaml                  ← deployment manifest
+└── LICENSE
 ```
-
-The `★`-marked files are the canonical entry points for AI-Lab grading.
 
 ---
 
-## REST API
+## Project Context
 
-`POST /roadmap/csp` is the algorithmic centrepiece. Full table in
-[`PROJECT_REPORT.md`](PROJECT_REPORT.md#appendix-b--rest-api-reference).
+Final submission for **CS 2005 — Artificial Intelligence**, FAST NUCES Karachi (Spring 2026).
 
-```bash
-curl -X POST http://localhost:8000/roadmap/csp \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "skills_gap": ["python","docker","react","system design","machine learning","interview"],
-    "total_weeks": 12,
-    "weekly_hour_budget": 15
-  }' | jq '.success, .stats, .assignment'
-```
+**Team:** Syed Taha Zaidi · Amna Khan · Kissa Zehra · Aiza Gazyani
 
-Returns `{success, reason, assignment, tasks, constraints, trace, stats}` with
-`trace` containing every solver step the visualization animates.
+The system is hosted as a publicly-available product beyond the original course scope.
 
 ---
-
-## Group Members
-
-Taha Zaidi · Amna Khan · Kissa Zehra · Aiza Gazyani
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT — see [LICENSE](LICENSE).
